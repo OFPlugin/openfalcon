@@ -302,18 +302,41 @@
     }
     .of-modal.hidden { display: none; }
     .of-modal-card {
-      background: var(--bg-card, #1e1e2a);
+      background: var(--bg-elevated);
       color: var(--text);
-      border: 1px solid var(--border, rgba(255,255,255,0.15));
+      border: 1px solid var(--border);
       border-radius: 10px;
       padding: 1.5rem;
       width: 100%;
       max-width: 440px;
       box-shadow: 0 8px 32px rgba(0,0,0,0.4);
     }
-    .of-modal-card h3,
+    .of-modal-card h3 {
+      margin: 0 0 0.5rem;
+      font-size: 1.25rem;
+      color: var(--text);
+    }
     .of-modal-card p {
       color: var(--text);
+    }
+    .of-modal-card label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--text);
+      margin-bottom: 0.25rem;
+    }
+    /* Inline labels (e.g. checkbox + text) need readable color too —
+       inline styles like style="display:flex" set on those labels won't
+       lose color because we target via attribute selectors. */
+    .of-modal-card label[style] {
+      color: var(--text) !important;
+    }
+    .of-modal-card input[type="text"],
+    .of-modal-card input[type="password"] {
+      width: 100%;
+      background: var(--bg-input);
+      color: var(--text);
+      border: 1px solid var(--border);
     }
     .of-modal-card button {
       color: var(--text);
@@ -324,21 +347,7 @@
       border: 1px solid var(--border);
     }
     .of-modal-card button.secondary:hover {
-      background: var(--bg-tertiary, rgba(255,255,255,0.06));
-    }
-    .of-modal-card h3 {
-      margin: 0 0 0.5rem;
-      font-size: 1.25rem;
-    }
-    .of-modal-card label {
-      display: block;
-      font-size: 0.85rem;
-      color: var(--text-muted, #aaa);
-      margin-bottom: 0.25rem;
-    }
-    .of-modal-card input[type="text"],
-    .of-modal-card input[type="password"] {
-      width: 100%;
+      background: var(--bg-tertiary);
     }
     .header-meta {
       font-size: 0.78rem;
@@ -835,7 +844,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.12.2</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.12.3</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
