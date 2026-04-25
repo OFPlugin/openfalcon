@@ -145,12 +145,12 @@ app.get('/', (req, res) => {
 // argument is the Base64-encoded rendered HTML; runtime JS decodes and
 // replaces the document.
 function buildObfuscationStub(encoded) {
-  // The script runs in <head> BEFORE the body is parsed. document.open()
-  // resets the document, and document.write() of the full HTML at this
-  // stage is equivalent to the browser parsing the HTML directly — scripts
-  // execute, DOMContentLoaded fires correctly, etc. Doing this AFTER the
-  // body finishes parsing would just append text to the body without
-  // executing scripts, which is what was breaking the viewer page.
+  // Strategy: parse the decoded HTML using DOMParser, then swap the live
+  // documentElement with the parsed one. This reliably replaces the entire
+  // page including <head> and <body>. document.write() doesn't work mid-parse;
+  // setting innerHTML doesn't run <script> tags. So we swap, then walk every
+  // <script> in the new tree and clone it — cloned scripts DO execute on
+  // insertion, which gives us full template script execution in document order.
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -173,46 +173,78 @@ function buildObfuscationStub(encoded) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Light Show</title>
-<script>
-(function(){
-  var p='${encoded}';
-  try {
-    var bin = atob(p);
-    var bytes = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    var html = new TextDecoder('utf-8').decode(bytes);
-    // Replace the document. Because this script runs BEFORE the body has
-    // finished parsing, document.open() + document.write() is equivalent to
-    // the server having sent the real HTML — scripts in the payload execute,
-    // styles apply, the page works normally.
-    document.open();
-    document.write(html);
-    document.close();
-
-    // Reattach casual deterrents to the new document. Done after document.close()
-    // so they bind to the real page's document, not the stub's.
-    document.addEventListener('keydown', function(e){
-      if (e.ctrlKey && (e.key === 'u' || e.key === 'U')) { e.preventDefault(); return false; }
-      if (e.ctrlKey && e.shiftKey && (e.key === 'i' || e.key === 'I' || e.key === 'j' || e.key === 'J')) { e.preventDefault(); return false; }
-      if (e.key === 'F12') { e.preventDefault(); return false; }
-    }, true);
-    document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; }, true);
-  } catch (e) {
-    // Fallback if anything goes sideways — show a plain refresh prompt
-    // so the page isn't blank.
-    document.documentElement.innerHTML = '<head><title>Light Show</title></head><body style="background:#0a0e27;color:#fff;font-family:system-ui;text-align:center;padding:2rem;"><h2>Show is loading…</h2><p>If this page does not load in a few seconds, please refresh.</p><pre style="opacity:0.4;font-size:0.7rem;">' + (e && e.message || 'unknown error') + '</pre></body>';
-  }
-})();
-</script>
-</head>
-<body>
 <style>
   html,body{margin:0;padding:0;background:#0a0e27;color:#fff;font-family:system-ui,sans-serif;}
   .of-stub-loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1rem;}
   .of-stub-loading .pulse{width:48px;height:48px;border-radius:50%;background:#dc2626;animation:ofStubPulse 1.2s ease-in-out infinite;}
   @keyframes ofStubPulse{0%,100%{transform:scale(0.85);opacity:0.6;}50%{transform:scale(1.1);opacity:1;}}
 </style>
+</head>
+<body>
 <div class="of-stub-loading"><div class="pulse"></div><div>Loading show…</div></div>
+<script>
+(function(){
+  var p='${encoded}';
+  function swapDocument() {
+    try {
+      var bin = atob(p);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      var html = new TextDecoder('utf-8').decode(bytes);
+
+      // Parse the decoded HTML into a fresh document tree, then swap our live
+      // <html> element with the parsed one. After this, the visible document
+      // IS the new content — but DOMParser-created <script> tags don't auto-
+      // execute, so we have to clone them to trigger execution.
+      var parser = new DOMParser();
+      var newDoc = parser.parseFromString(html, 'text/html');
+      document.replaceChild(
+        document.importNode(newDoc.documentElement, true),
+        document.documentElement
+      );
+
+      // Walk every script in the now-live tree and replace each one with a
+      // freshly-created equivalent. Cloned scripts execute on insertion,
+      // which gives us the same behavior as if the server had sent the page
+      // directly. Inline scripts run synchronously in DOM order; external
+      // scripts (with src) load and run async per the browser's normal rules.
+      var scriptList = [];
+      var scripts = document.getElementsByTagName('script');
+      for (var i = 0; i < scripts.length; i++) scriptList.push(scripts[i]);
+      for (var j = 0; j < scriptList.length; j++) {
+        var oldScript = scriptList[j];
+        var newScript = document.createElement('script');
+        for (var k = 0; k < oldScript.attributes.length; k++) {
+          var attr = oldScript.attributes[k];
+          newScript.setAttribute(attr.name, attr.value);
+        }
+        if (oldScript.textContent) newScript.textContent = oldScript.textContent;
+        oldScript.parentNode.replaceChild(newScript, oldScript);
+      }
+
+      // Reattach casual deterrents to the new live document.
+      document.addEventListener('keydown', function(e){
+        if (e.ctrlKey && (e.key === 'u' || e.key === 'U')) { e.preventDefault(); return false; }
+        if (e.ctrlKey && e.shiftKey && (e.key === 'i' || e.key === 'I' || e.key === 'j' || e.key === 'J')) { e.preventDefault(); return false; }
+        if (e.key === 'F12') { e.preventDefault(); return false; }
+      }, true);
+      document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; }, true);
+    } catch (e) {
+      console.error('Document swap failed:', e);
+      document.body.innerHTML = '<div style="padding:2rem;text-align:center;font-family:system-ui;color:#fff;background:#0a0e27;min-height:100vh;"><h2>Show is loading…</h2><p>If this page does not load in a few seconds, please refresh.</p></div>';
+    }
+  }
+
+  // Run after DOMContentLoaded so the stub body has finished parsing — gives
+  // us a stable starting document to swap from. If DOM is already ready
+  // (some browsers fire faster), run immediately.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', swapDocument);
+  } else {
+    swapDocument();
+  }
+})();
+</script>
 </body>
 </html>`;
 }
