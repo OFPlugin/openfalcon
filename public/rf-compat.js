@@ -184,14 +184,13 @@
     if (queueListEl) {
       const byName = Object.fromEntries((data.sequences || []).map(s => [s.name, s]));
       if ((data.queue || []).length === 0) {
-        queueListEl.innerHTML = '<em>Queue is empty.</em>';
+        queueListEl.textContent = 'Queue is empty.';
       } else {
-        queueListEl.innerHTML = '<ol class="jukebox-queue-list">' +
-          data.queue.map(e => {
-            const seq = byName[e.sequence_name];
-            const name = seq ? seq.display_name : e.sequence_name;
-            return '<li>' + escapeHtml(name) + '</li>';
-          }).join('') + '</ol>';
+        queueListEl.innerHTML = data.queue.map(e => {
+          const seq = byName[e.sequence_name];
+          const name = seq ? seq.display_name : e.sequence_name;
+          return escapeHtml(name);
+        }).join('<br />');
       }
     }
 
