@@ -194,6 +194,20 @@
       }
     }
 
+    // --- Sequence cover images (live-update when admin changes a cover) ---
+    // Each sequence-image carries data-seq-name so we can target it precisely.
+    // The server returns image_url with a ?v=<mtime> cache-buster, so a different
+    // src means the cover was updated.
+    (data.sequences || []).forEach(seq => {
+      if (!seq.image_url) return;
+      const imgs = document.querySelectorAll(`img[data-seq-name="${CSS.escape(seq.name)}"]`);
+      imgs.forEach(img => {
+        if (img.getAttribute('src') !== seq.image_url) {
+          img.setAttribute('src', seq.image_url);
+        }
+      });
+    });
+
     // --- Mode container visibility ---
     document.querySelectorAll('[data-openfalcon-container="jukebox"]').forEach(el => {
       el.style.display = data.viewerControlMode === 'JUKEBOX' ? '' : 'none';
@@ -229,6 +243,8 @@
       socket.on('queueUpdated', () => refreshState());
       socket.on('nowPlaying', () => refreshState());
       socket.on('voteReset', () => { hasVoted = false; refreshState(); });
+      socket.on('sequencesReordered', () => refreshState()); // covers updated, sequences edited, etc.
+      socket.on('sequencesSynced', () => refreshState());
     }
   } catch {}
 })();
