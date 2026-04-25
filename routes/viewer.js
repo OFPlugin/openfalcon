@@ -316,6 +316,19 @@ router.get('/now-playing-audio', (req, res) => {
   const startedAtMs = np.started_at ? new Date(np.started_at.replace(' ', 'T') + 'Z').getTime() : null;
   const elapsedSec = startedAtMs ? Math.max(0, (Date.now() - startedAtMs) / 1000) : 0;
 
+  // Build audio daemon URLs if a plugin has registered an FPP host.
+  // The daemon runs on FPP itself (default port 8090) and serves audio
+  // directly + a WebSocket time-sync channel. Browser connects to it directly.
+  const cfg = getConfig();
+  const fppHost = cfg.plugin_fpp_host;
+  const audioPort = cfg.audio_daemon_port || 8090;
+  let directStreamUrl = null;
+  let wsSyncUrl = null;
+  if (fppHost) {
+    directStreamUrl = `http://${fppHost}:${audioPort}/audio/${encodeURIComponent(seq.media_name)}`;
+    wsSyncUrl = `ws://${fppHost}:${audioPort}/sync`;
+  }
+
   res.json({
     playing: true,
     hasAudio: true,
@@ -326,6 +339,10 @@ router.get('/now-playing-audio', (req, res) => {
     durationSec: seq.duration_seconds || null,
     elapsedSec: Math.round(elapsedSec * 10) / 10,
     startedAt: np.started_at,
+    // Direct daemon URLs (Phase 2 — preferred). If null, viewer falls back to proxy.
+    directStreamUrl,
+    wsSyncUrl,
+    // Proxy fallback (Phase 1) — works even without daemon
     streamUrl: `/api/audio-stream/${encodeURIComponent(seq.name)}`,
   });
 });

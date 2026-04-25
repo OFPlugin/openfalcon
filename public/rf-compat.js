@@ -249,16 +249,24 @@
   } catch {}
 
   // ============================================================
-  // LISTEN ON PHONE — optional in-browser audio player
+  // LISTEN ON PHONE — in-browser audio player with live sync
   //
-  // Toggleable floating button + bottom sheet. When enabled, polls
-  // /api/now-playing-audio for the active sequence + elapsed time, then
-  // streams the audio via /api/audio-stream/<seq>. Seeks forward to match
-  // FPP's playback position so users hear the song approximately in sync
-  // with the lights — within a second or two on good networks.
+  // Connects DIRECTLY to the OpenFalcon audio daemon running on FPP
+  // (not through the OpenFalcon server proxy). The daemon serves
+  // Range-aware audio + a WebSocket time-sync feed.
   //
-  // NOT a perfect-sync solution (no continuous time correction). Sufficient
-  // for "I'm in the driveway and the radio sucks" — a useful fallback.
+  // Sync strategy:
+  //   1. WebSocket pushes `{ sequence, position, serverTimestamp }` ~4×/sec
+  //   2. Compute target position = serverPosition + (now - serverTimestamp)
+  //   3. If drift > 2 seconds → hard seek (audio.currentTime = target)
+  //   4. If drift > 100ms     → adjust audio.playbackRate (subtle, inaudible)
+  //   5. If drift < 100ms     → playbackRate back to 1.0
+  //
+  // playbackRate adjustments stay within ±2% (1.02 / 0.98) so they're inaudible
+  // but accumulate to several hundred ms of correction per minute. This is the
+  // same approach internet radio sync services use.
+  //
+  // Falls back to /api/now-playing-audio polling if WebSocket fails.
   // ============================================================
   (function initListenOnPhone() {
     const btn = document.createElement('button');
@@ -301,8 +309,11 @@
         </div>
         <button id="of-listen-close" aria-label="Close" style="background: transparent; border: 0; color: #aaa; font-size: 22px; cursor: pointer; padding: 0; line-height: 1;">×</button>
       </div>
-      <audio id="of-listen-audio" controls style="width: 100%; height: 36px; margin-bottom: 8px;"></audio>
-      <div id="of-listen-status" style="font-size: 11px; color: #888; text-align: center; min-height: 14px;"></div>
+      <audio id="of-listen-audio" controls style="width: 100%; height: 36px; margin-bottom: 6px;"></audio>
+      <div style="display: flex; justify-content: space-between; font-size: 10px; color: #777; min-height: 14px;">
+        <span id="of-listen-status"></span>
+        <span id="of-listen-drift"></span>
+      </div>
     `;
 
     document.body.appendChild(btn);
@@ -313,99 +324,239 @@
     const artistEl = panel.querySelector('#of-listen-artist');
     const coverEl = panel.querySelector('#of-listen-cover');
     const statusEl = panel.querySelector('#of-listen-status');
+    const driftEl = panel.querySelector('#of-listen-drift');
     const closeBtn = panel.querySelector('#of-listen-close');
 
     let panelOpen = false;
-    let pollTimer = null;
+    let ws = null;
+    let pollFallbackTimer = null;
+    let driftCorrectionTimer = null;
     let currentSequence = null;
+    let currentMediaName = null;
+    let lastSyncMsg = null;     // most recent WS sync message
     let userSeeking = false;
+    let metaUrls = null;        // { directStreamUrl, wsSyncUrl } from REST
 
     btn.onclick = () => {
       panelOpen = !panelOpen;
       panel.style.display = panelOpen ? 'block' : 'none';
-      if (panelOpen) startPolling();
-      else stopPolling();
+      if (panelOpen) startPlayer();
+      else stopPlayer();
     };
     closeBtn.onclick = () => { btn.click(); };
 
     audio.addEventListener('seeking', () => { userSeeking = true; });
-    audio.addEventListener('seeked', () => { setTimeout(() => { userSeeking = false; }, 500); });
+    audio.addEventListener('seeked', () => { setTimeout(() => { userSeeking = false; }, 800); });
 
-    async function startPolling() {
-      await syncToNowPlaying();
-      pollTimer = setInterval(syncToNowPlaying, 5000);
+    async function startPlayer() {
+      // Get the daemon URLs from OpenFalcon
+      const r = await fetch('/api/now-playing-audio', { credentials: 'include' }).catch(() => null);
+      if (!r || !r.ok) {
+        statusEl.textContent = 'Server error';
+        return;
+      }
+      const data = await r.json();
+      if (!data.playing) {
+        statusEl.textContent = 'Show is not playing';
+        titleEl.textContent = 'Not playing';
+        return;
+      }
+      if (!data.hasAudio) {
+        statusEl.textContent = 'No audio for this sequence';
+        titleEl.textContent = data.sequenceName || 'Playing';
+        return;
+      }
+
+      metaUrls = {
+        directStreamUrl: data.directStreamUrl,
+        wsSyncUrl: data.wsSyncUrl,
+        proxyStreamUrl: data.streamUrl,
+      };
+
+      // Update display
+      titleEl.textContent = data.displayName || data.sequenceName;
+      artistEl.textContent = data.artist || '';
+      coverEl.src = data.imageUrl || '';
+      coverEl.style.visibility = data.imageUrl ? 'visible' : 'hidden';
+
+      // Try WebSocket first — preferred path with sub-second sync
+      if (data.wsSyncUrl) {
+        connectWebSocket(data.wsSyncUrl);
+      }
+
+      // Always have REST polling as a parallel fallback (covers WS gaps)
+      pollFallbackTimer = setInterval(pollNowPlaying, 5000);
+      pollNowPlaying(); // first call
+
+      // Continuous drift correction loop — runs every 250ms
+      driftCorrectionTimer = setInterval(applyDriftCorrection, 250);
     }
-    function stopPolling() {
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+
+    function stopPlayer() {
+      if (ws) { try { ws.close(); } catch {} ws = null; }
+      if (pollFallbackTimer) { clearInterval(pollFallbackTimer); pollFallbackTimer = null; }
+      if (driftCorrectionTimer) { clearInterval(driftCorrectionTimer); driftCorrectionTimer = null; }
       audio.pause();
       audio.removeAttribute('src');
       audio.load();
+      audio.playbackRate = 1.0;
       currentSequence = null;
+      currentMediaName = null;
+      lastSyncMsg = null;
     }
 
-    async function syncToNowPlaying() {
+    function connectWebSocket(wsUrl) {
+      try {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+          statusEl.textContent = '🔗 Connected';
+        };
+        ws.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg.type !== 'sync') return;
+            handleSyncMessage(msg);
+          } catch {}
+        };
+        ws.onclose = () => {
+          statusEl.textContent = 'Disconnected — falling back to polling';
+          ws = null;
+          // REST polling is already running
+        };
+        ws.onerror = () => {
+          statusEl.textContent = 'WS error — falling back to polling';
+        };
+      } catch (e) {
+        statusEl.textContent = 'WS unavailable — using polling';
+      }
+    }
+
+    function handleSyncMessage(msg) {
+      lastSyncMsg = { ...msg, receivedAt: Date.now() };
+
+      // Track changed?
+      if (msg.sequence !== currentSequence) {
+        switchToTrack(msg);
+      }
+    }
+
+    async function pollNowPlaying() {
       try {
         const r = await fetch('/api/now-playing-audio', { credentials: 'include' });
-        if (!r.ok) {
-          statusEl.textContent = 'Server error fetching audio info';
-          return;
-        }
+        if (!r.ok) return;
         const data = await r.json();
-
         if (!data.playing || !data.hasAudio) {
-          titleEl.textContent = data.playing ? (data.sequenceName || 'Playing — no audio') : 'Not playing';
-          artistEl.textContent = '';
-          coverEl.src = '';
-          statusEl.textContent = data.playing ? 'No audio file linked to this sequence' : 'Show is not playing';
-          if (currentSequence) {
-            audio.pause();
-            audio.removeAttribute('src');
-            audio.load();
-            currentSequence = null;
+          // Show stopped or no audio — don't disrupt if WS is sending updates
+          if (!ws || ws.readyState !== 1) {
+            if (currentSequence) stopPlayer();
+            statusEl.textContent = data.playing ? 'No audio for this sequence' : 'Show is not playing';
           }
           return;
         }
-
-        // New song — switch streams and seek to elapsed position
-        if (data.sequenceName !== currentSequence) {
-          currentSequence = data.sequenceName;
-          titleEl.textContent = data.displayName || data.sequenceName;
-          artistEl.textContent = data.artist || '';
-          coverEl.src = data.imageUrl || '';
-          coverEl.style.visibility = data.imageUrl ? 'visible' : 'hidden';
-          statusEl.textContent = 'Loading audio…';
-
-          // Use Media Fragment URI (#t=<seconds>) — most reliable way to start
-          // mid-track. Browsers treat this as initial seek, applied before play.
-          const seekTo = (data.elapsedSec > 1) ? Math.max(0, data.elapsedSec - 0.3) : 0;
-          audio.src = data.streamUrl + (seekTo > 0 ? ('#t=' + seekTo.toFixed(2)) : '');
-
-          // Belt-and-suspenders: also try setting currentTime once metadata loads
-          audio.addEventListener('loadedmetadata', function onMeta() {
-            audio.removeEventListener('loadedmetadata', onMeta);
-            try {
-              const dur = audio.duration;
-              if (seekTo > 0 && Number.isFinite(dur) && seekTo < dur) {
-                audio.currentTime = seekTo;
-              }
-            } catch (e) {}
-            audio.play().catch(() => {
-              statusEl.textContent = 'Tap play to start audio';
-            });
-          }, { once: true });
-          audio.addEventListener('canplay', () => {
-            statusEl.textContent = '';
-          }, { once: true });
-        } else if (!userSeeking && audio.paused === false) {
-          // Same song, drift correction: if our position is more than 3s off
-          // from server's elapsed, gently snap to it. Skipped if user is seeking.
-          const drift = Math.abs(audio.currentTime - data.elapsedSec);
-          if (drift > 3 && data.elapsedSec < (audio.duration || Infinity)) {
-            audio.currentTime = data.elapsedSec;
+        // Update metadata that REST has but WS doesn't (cover, artist, displayName)
+        if (data.sequenceName === currentSequence) {
+          if (data.imageUrl && coverEl.src !== data.imageUrl) coverEl.src = data.imageUrl;
+          if (data.artist) artistEl.textContent = data.artist;
+        }
+        // If WS isn't connected, use REST as the sync source
+        if (!ws || ws.readyState !== 1) {
+          handleSyncMessage({
+            type: 'sync',
+            sequence: data.sequenceName,
+            mediaName: data.sequenceName,  // best we have without daemon
+            position: data.elapsedSec,
+            trackDuration: data.durationSec,
+            serverTimestamp: Date.now(),
+          });
+          // Also keep meta refreshed for cover/title
+          if (data.sequenceName !== currentSequence) {
+            titleEl.textContent = data.displayName || data.sequenceName;
+            artistEl.textContent = data.artist || '';
+            coverEl.src = data.imageUrl || '';
+            coverEl.style.visibility = data.imageUrl ? 'visible' : 'hidden';
           }
         }
-      } catch (err) {
-        statusEl.textContent = 'Network error — retrying…';
+      } catch {}
+    }
+
+    function switchToTrack(msg) {
+      currentSequence = msg.sequence;
+      currentMediaName = msg.mediaName || msg.sequence;
+      statusEl.textContent = 'Loading audio…';
+
+      // Compute initial seek (target = position + network latency estimate)
+      const seekTo = Math.max(0, msg.position - 0.2);
+
+      // Build stream URL — prefer direct daemon, fall back to OpenFalcon proxy
+      let streamUrl;
+      if (metaUrls && metaUrls.directStreamUrl && currentMediaName) {
+        // Daemon URL is keyed by mediaName (the actual filename)
+        const baseUrl = metaUrls.directStreamUrl.replace(/\/audio\/[^/]+$/, '/audio/');
+        streamUrl = baseUrl + encodeURIComponent(currentMediaName);
+      } else if (metaUrls && metaUrls.proxyStreamUrl) {
+        streamUrl = metaUrls.proxyStreamUrl;
+      } else {
+        return;
+      }
+
+      // Use Media Fragment URI for initial position
+      audio.src = streamUrl + (seekTo > 0 ? ('#t=' + seekTo.toFixed(2)) : '');
+
+      audio.addEventListener('loadedmetadata', function onMeta() {
+        audio.removeEventListener('loadedmetadata', onMeta);
+        try {
+          if (Number.isFinite(audio.duration) && seekTo < audio.duration) {
+            audio.currentTime = seekTo;
+          }
+        } catch {}
+        audio.play().catch(() => {
+          statusEl.textContent = 'Tap play to start audio';
+        });
+      }, { once: true });
+      audio.addEventListener('canplay', () => { statusEl.textContent = ''; }, { once: true });
+    }
+
+    function applyDriftCorrection() {
+      if (!lastSyncMsg || !currentSequence || audio.paused || userSeeking) {
+        if (driftEl) driftEl.textContent = '';
+        return;
+      }
+
+      // Compute where we SHOULD be: server's reported position +
+      // time elapsed since that report
+      const sinceReport = (Date.now() - lastSyncMsg.receivedAt) / 1000;
+      const serverPosition = lastSyncMsg.position + sinceReport;
+
+      const drift = audio.currentTime - serverPosition;
+      const absDrift = Math.abs(drift);
+
+      // Update drift indicator
+      if (driftEl) {
+        const ms = Math.round(drift * 1000);
+        driftEl.textContent = (ms >= 0 ? '+' : '') + ms + 'ms';
+        driftEl.style.color = absDrift < 0.15 ? '#4ade80' : (absDrift < 1 ? '#fb923c' : '#ef4444');
+      }
+
+      // Hard seek if way off
+      if (absDrift > 2) {
+        try {
+          if (Number.isFinite(audio.duration) && serverPosition < audio.duration) {
+            audio.currentTime = serverPosition;
+            audio.playbackRate = 1.0;
+          }
+        } catch {}
+        return;
+      }
+
+      // playbackRate correction: speed up or slow down up to 2%
+      if (absDrift < 0.1) {
+        audio.playbackRate = 1.0;
+      } else if (drift < 0) {
+        // We're behind — speed up
+        audio.playbackRate = absDrift > 0.5 ? 1.02 : 1.01;
+      } else {
+        // We're ahead — slow down
+        audio.playbackRate = absDrift > 0.5 ? 0.98 : 0.99;
       }
     }
   })();
