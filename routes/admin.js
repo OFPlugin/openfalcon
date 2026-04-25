@@ -16,51 +16,71 @@ const { db, getConfig, updateConfig,
 // Auth
 // ============================================================
 
+// Session length defaults to config.sessionDurationHours (typically 24h).
+// If user has remember_me=1, we extend to 30 days.
+const REMEMBER_ME_DAYS = 30;
+
 function requireAdmin(req, res, next) {
   const token = req.cookies[config.sessionCookieName];
   if (!token) return res.status(401).json({ error: 'Not logged in' });
   try {
-    jwt.verify(token, config.jwtSecret);
+    const payload = jwt.verify(token, config.jwtSecret);
+    if (!payload.userId) return res.status(401).json({ error: 'Invalid session' });
+    const user = require('../lib/db').getUserById(payload.userId);
+    if (!user || !user.enabled) {
+      res.clearCookie(config.sessionCookieName);
+      return res.status(401).json({ error: 'User no longer exists or is disabled' });
+    }
+    req.user = user;
     next();
   } catch {
     res.status(401).json({ error: 'Invalid session' });
   }
 }
 
-// POST /api/admin/login — body: { password }
+function issueSessionCookie(res, user) {
+  const expiresIn = user.remember_me ? `${REMEMBER_ME_DAYS}d` : `${config.sessionDurationHours}h`;
+  const maxAge = user.remember_me
+    ? REMEMBER_ME_DAYS * 24 * 3600 * 1000
+    : config.sessionDurationHours * 3600 * 1000;
+  const token = jwt.sign({ userId: user.id, username: user.username }, config.jwtSecret, { expiresIn });
+  // If remember_me is OFF, omit maxAge so it's a session cookie that dies with the browser
+  const cookieOpts = { httpOnly: true, sameSite: 'lax' };
+  if (user.remember_me) cookieOpts.maxAge = maxAge;
+  res.cookie(config.sessionCookieName, token, cookieOpts);
+}
+
+// POST /api/admin/login — body: { username, password, rememberMe }
 router.post('/login', async (req, res) => {
-  const { password } = req.body || {};
-  if (!password) return res.status(400).json({ error: 'Missing password' });
-
-  const cfg = getConfig();
-
-  // First-run: no password set yet. Accept any non-empty and set it.
-  if (!cfg.admin_password_hash) {
-    const hash = await bcrypt.hash(password, 10);
-    updateConfig({ admin_password_hash: hash });
-    const token = jwt.sign({ admin: true }, config.jwtSecret, {
-      expiresIn: `${config.sessionDurationHours}h`,
-    });
-    res.cookie(config.sessionCookieName, token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      maxAge: config.sessionDurationHours * 3600 * 1000,
-    });
-    return res.json({ ok: true, firstRun: true });
+  const { username, password, rememberMe } = req.body || {};
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password required' });
   }
 
-  const match = await bcrypt.compare(password, cfg.admin_password_hash);
-  if (!match) return res.status(401).json({ error: 'Invalid password' });
+  const { getUserByUsername, recordUserLogin, updateUser } = require('../lib/db');
+  const user = getUserByUsername(String(username).trim());
+  if (!user || !user.enabled) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
 
-  const token = jwt.sign({ admin: true }, config.jwtSecret, {
-    expiresIn: `${config.sessionDurationHours}h`,
+  const match = await bcrypt.compare(password, user.password_hash);
+  if (!match) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+
+  // Persist remember_me preference if it changed
+  if (!!user.remember_me !== !!rememberMe) {
+    updateUser(user.id, { remember_me: rememberMe ? 1 : 0 });
+    user.remember_me = rememberMe ? 1 : 0;
+  }
+
+  recordUserLogin(user.id);
+  issueSessionCookie(res, user);
+  res.json({
+    ok: true,
+    username: user.username,
+    mustChangePassword: !!user.must_change_password,
   });
-  res.cookie(config.sessionCookieName, token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    maxAge: config.sessionDurationHours * 3600 * 1000,
-  });
-  res.json({ ok: true });
 });
 
 router.post('/logout', (req, res) => {
@@ -69,7 +89,13 @@ router.post('/logout', (req, res) => {
 });
 
 router.get('/me', requireAdmin, (req, res) => {
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    username: req.user.username,
+    userId: req.user.id,
+    rememberMe: !!req.user.remember_me,
+    mustChangePassword: !!req.user.must_change_password,
+  });
 });
 
 // ============================================================
@@ -94,6 +120,7 @@ router.put('/config', requireAdmin, (req, res) => {
     'jukebox_queue_depth',
     'jukebox_sequence_request_limit',
     'prevent_multiple_requests',
+    'viewer_request_limit',
     // Voting safeguards
     'prevent_multiple_votes',
     'reset_votes_after_round',
@@ -140,18 +167,127 @@ router.put('/config', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// ============================================================
+// User self-service: change own password
+// ============================================================
+
 router.post('/change-password', requireAdmin, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
-  if (!newPassword) return res.status(400).json({ error: 'Missing new password' });
-
-  const cfg = getConfig();
-  if (cfg.admin_password_hash) {
-    const match = await bcrypt.compare(currentPassword || '', cfg.admin_password_hash);
-    if (!match) return res.status(401).json({ error: 'Current password incorrect' });
+  if (!newPassword || newPassword.length < 4) {
+    return res.status(400).json({ error: 'New password must be at least 4 characters' });
   }
 
+  const { setUserPassword } = require('../lib/db');
+  const match = await bcrypt.compare(currentPassword || '', req.user.password_hash);
+  if (!match) return res.status(401).json({ error: 'Current password incorrect' });
+
   const hash = await bcrypt.hash(newPassword, 10);
-  updateConfig({ admin_password_hash: hash });
+  setUserPassword(req.user.id, hash, false);
+  res.json({ ok: true });
+});
+
+// ============================================================
+// User management (admin actions on other users)
+// ============================================================
+
+router.get('/users', requireAdmin, (req, res) => {
+  const { listUsers } = require('../lib/db');
+  res.json({ users: listUsers() });
+});
+
+router.post('/users', requireAdmin, async (req, res) => {
+  const { username, password, mustChangePassword } = req.body || {};
+  const u = String(username || '').trim();
+  if (!u) return res.status(400).json({ error: 'Username required' });
+  if (!/^[a-zA-Z0-9_.-]{2,32}$/.test(u)) {
+    return res.status(400).json({ error: 'Username must be 2-32 characters: letters, digits, _ . -' });
+  }
+  if (!password || password.length < 4) {
+    return res.status(400).json({ error: 'Password must be at least 4 characters' });
+  }
+
+  const { getUserByUsername, createUser } = require('../lib/db');
+  if (getUserByUsername(u)) {
+    return res.status(409).json({ error: 'Username already exists' });
+  }
+
+  const hash = await bcrypt.hash(password, 10);
+  const id = createUser({
+    username: u,
+    passwordHash: hash,
+    mustChangePassword: !!mustChangePassword,
+  });
+  res.json({ ok: true, id });
+});
+
+router.patch('/users/:id', requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  const { getUserById, getUserByUsername, updateUser, countUsers } = require('../lib/db');
+  const target = getUserById(id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+
+  const fields = {};
+  if ('username' in req.body) {
+    const u = String(req.body.username || '').trim();
+    if (!/^[a-zA-Z0-9_.-]{2,32}$/.test(u)) {
+      return res.status(400).json({ error: 'Username must be 2-32 characters: letters, digits, _ . -' });
+    }
+    const existing = getUserByUsername(u);
+    if (existing && existing.id !== id) {
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+    fields.username = u;
+  }
+  if ('enabled' in req.body) {
+    const newEnabled = req.body.enabled ? 1 : 0;
+    // Don't allow disabling the last enabled user — would lock everyone out
+    if (!newEnabled && target.enabled && countUsers() <= 1) {
+      return res.status(400).json({ error: 'Cannot disable the last enabled user' });
+    }
+    // Also don't allow disabling yourself
+    if (!newEnabled && id === req.user.id) {
+      return res.status(400).json({ error: 'You cannot disable your own account' });
+    }
+    fields.enabled = newEnabled;
+  }
+  if ('mustChangePassword' in req.body) {
+    fields.must_change_password = req.body.mustChangePassword ? 1 : 0;
+  }
+
+  updateUser(id, fields);
+  res.json({ ok: true });
+});
+
+router.post('/users/:id/reset-password', requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  const { newPassword } = req.body || {};
+  if (!newPassword || newPassword.length < 4) {
+    return res.status(400).json({ error: 'Password must be at least 4 characters' });
+  }
+  const { getUserById, setUserPassword } = require('../lib/db');
+  const target = getUserById(id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  const hash = await bcrypt.hash(newPassword, 10);
+  // Force the user to change it on next login (since admin chose it)
+  setUserPassword(id, hash, true);
+  res.json({ ok: true });
+});
+
+router.delete('/users/:id', requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  if (id === req.user.id) {
+    return res.status(400).json({ error: 'You cannot delete your own account' });
+  }
+  const { getUserById, deleteUser, countUsers } = require('../lib/db');
+  const target = getUserById(id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (countUsers() <= 1) {
+    return res.status(400).json({ error: 'Cannot delete the last user' });
+  }
+  deleteUser(id);
   res.json({ ok: true });
 });
 

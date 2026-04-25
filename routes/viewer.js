@@ -300,12 +300,16 @@ router.post('/jukebox/add', (req, res) => {
   }
 
   if (cfg.prevent_multiple_requests) {
+    const limit = Math.max(1, parseInt(cfg.viewer_request_limit, 10) || 1);
     const existing = db.prepare(
       `SELECT COUNT(*) AS n FROM jukebox_queue
        WHERE viewer_token = ? AND played = 0 AND handed_off_at IS NULL`
     ).get(token).n;
-    if (existing >= 1) {
-      return res.status(409).json({ error: 'You already have a request in the queue' });
+    if (existing >= limit) {
+      const noun = limit === 1 ? 'request' : 'requests';
+      return res.status(409).json({
+        error: `You already have ${existing} ${noun} in the queue. This show limits each viewer to ${limit} ${noun} at a time — please wait until your current ${noun} ${limit === 1 ? 'plays' : 'play'} before requesting another.`,
+      });
     }
   }
 

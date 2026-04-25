@@ -268,6 +268,62 @@
     .mode-pill.jukebox { background: var(--rgb-blue); color: #fff; box-shadow: 0 0 12px rgba(59,130,246,0.3); }
     .mode-pill.off { background: var(--status-neutral); color: #fff; }
     .header-spacer { margin-left: auto; }
+    .header-user {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding-left: 0.75rem;
+      border-left: 1px solid rgba(255,255,255,0.15);
+    }
+    .header-user-name {
+      font-weight: 600;
+      font-size: 0.9rem;
+      color: var(--text);
+    }
+    .header-user-btn {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: var(--text);
+      padding: 0.35rem 0.7rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .header-user-btn:hover {
+      background: rgba(255,255,255,0.15);
+    }
+
+    /* Modal overlay */
+    .of-modal {
+      position: fixed; inset: 0; z-index: 100;
+      background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+      padding: 1rem;
+    }
+    .of-modal.hidden { display: none; }
+    .of-modal-card {
+      background: var(--bg-card, #1e1e2a);
+      border: 1px solid var(--border, rgba(255,255,255,0.15));
+      border-radius: 10px;
+      padding: 1.5rem;
+      width: 100%;
+      max-width: 440px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    .of-modal-card h3 {
+      margin: 0 0 0.5rem;
+      font-size: 1.25rem;
+    }
+    .of-modal-card label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--text-muted, #aaa);
+      margin-bottom: 0.25rem;
+    }
+    .of-modal-card input[type="text"],
+    .of-modal-card input[type="password"] {
+      width: 100%;
+    }
     .header-meta {
       font-size: 0.78rem;
       color: var(--text-muted);
@@ -742,10 +798,18 @@
        ============================================================ -->
   <div id="loginView" class="hidden">
     <h1>OpenFalcon Admin</h1>
-    <p class="subtitle">First time? Any password you enter will be saved as the admin password.</p>
-    <input type="password" id="loginPassword" placeholder="Admin password" />
+    <p class="subtitle">Enter your username and password to continue.</p>
+    <input type="text" id="loginUsername" placeholder="Username" autocomplete="username" autocapitalize="none" autocorrect="off" onkeydown="if(event.key==='Enter')document.getElementById('loginPassword').focus();" />
+    <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')login();" />
+    <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0; font-size: 0.9rem; color: var(--text-muted, #aaa); cursor: pointer;">
+      <input type="checkbox" id="loginRememberMe" style="width: auto; margin: 0;" />
+      Remember me on this device (30 days)
+    </label>
     <button onclick="login()">Log in</button>
     <div id="loginMsg"></div>
+    <p class="subtitle" style="margin-top: 1.5rem; font-size: 0.8rem; opacity: 0.6;">
+      First time? Default credentials are <code>admin</code> / <code>admin</code>. You'll be prompted to change them.
+    </p>
   </div>
 
   <!-- ============================================================
@@ -755,7 +819,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.11.21</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.12.0</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -773,7 +837,7 @@
         <option value="independence">🎆 Independence Day</option>
         <option value="valentines">💝 Valentine's</option>
       </select>
-      <button class="secondary" onclick="logout()">Log out</button>
+      <span id="headerUserSlot"></span>
     </header>
 
     <!-- Persistent status strip -->
@@ -806,6 +870,7 @@
       <button class="tab-btn" data-tab="viewer" onclick="switchMainTab('viewer')">Viewer Page</button>
       <button class="tab-btn" data-tab="settings" onclick="switchMainTab('settings')">Settings</button>
       <button class="tab-btn" data-tab="plugin" onclick="switchMainTab('plugin')">Plugin</button>
+      <button class="tab-btn" data-tab="users" onclick="switchMainTab('users')">Users</button>
     </nav>
 
     <main>
@@ -1227,9 +1292,13 @@
                 <input type="number" id="cfg_jukebox_sequence_request_limit" min="0" max="20" onchange="saveSetting('jukebox_sequence_request_limit', this.value)" />
               </div>
             </div>
-            <div class="row" style="margin-top: 0.75rem;">
-              <input type="checkbox" id="cfg_prevent_multiple_requests" onchange="saveSetting('prevent_multiple_requests', this.checked ? 1 : 0)" />
-              <label for="cfg_prevent_multiple_requests" style="margin: 0;">Limit each viewer to one pending request at a time</label>
+            <div class="row" style="margin-top: 0.75rem; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+              <input type="checkbox" id="cfg_prevent_multiple_requests" onchange="saveSetting('prevent_multiple_requests', this.checked ? 1 : 0); updateViewerRequestLimitVisibility();" />
+              <label for="cfg_prevent_multiple_requests" style="margin: 0;">Limit each viewer to</label>
+              <input type="number" id="cfg_viewer_request_limit" min="1" max="20"
+                     onchange="saveSetting('viewer_request_limit', this.value)"
+                     style="width: 60px;" />
+              <label for="cfg_viewer_request_limit" style="margin: 0;">pending request(s) at a time</label>
             </div>
             <div class="row">
               <input type="checkbox" id="cfg_hide_sequence_after_played" onchange="saveSetting('hide_sequence_after_played', this.checked ? 1 : 0)" />
@@ -1301,12 +1370,11 @@
           <div>
             <label for="cfg_public_base_url">Public base URL (your domain)</label>
             <input type="text" id="cfg_public_base_url"
-                   placeholder="https://lightsondrake.org"
+                   placeholder="https://yourdomain.com"
                    onchange="saveSetting('public_base_url', this.value.trim())"
                    style="width: 100%; max-width: 400px;" />
             <p class="muted" style="font-size: 0.8rem; margin: 0.4rem 0 0;">
-              Should resolve to this server through your reverse proxy. The audio stream endpoint
-              must be reachable at <code>&lt;domain&gt;/api/audio-stream/...</code>.
+              The full URL where this OpenFalcon instance is publicly reachable.
               Leave blank to disable external access.
             </p>
           </div>
@@ -1350,7 +1418,89 @@
         </div>
       </div>
 
+      <!-- ============================================================
+           TAB: USERS
+           ============================================================ -->
+      <div class="tab-pane" data-pane="users">
+        <div class="card">
+          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+            <h2 style="margin: 0;">Users</h2>
+            <button onclick="showAddUserModal()">+ Add User</button>
+          </div>
+          <p class="muted" style="font-size: 0.9rem; margin: 0 0 1rem;">
+            Anyone in this list can log in to the admin panel with full privileges.
+            Disabled users keep their account but can't log in.
+          </p>
+          <div id="usersList" style="display: flex; flex-direction: column; gap: 0.5rem;">
+            <div class="muted" style="text-align: center; padding: 1rem;">Loading users…</div>
+          </div>
+        </div>
+      </div>
+
     </main>
+  </div>
+
+  <!-- ============================================================
+       MODAL: Change own password
+       ============================================================ -->
+  <div id="changePasswordModal" class="of-modal hidden">
+    <div class="of-modal-card">
+      <h3 id="changePasswordTitle">Change Password</h3>
+      <p id="changePasswordSubtitle" class="muted" style="font-size: 0.9rem; margin: 0 0 1rem;"></p>
+      <label for="cpw_current">Current password</label>
+      <input type="password" id="cpw_current" autocomplete="current-password" />
+      <label for="cpw_new" style="margin-top: 0.75rem;">New password</label>
+      <input type="password" id="cpw_new" autocomplete="new-password" />
+      <label for="cpw_confirm" style="margin-top: 0.75rem;">Confirm new password</label>
+      <input type="password" id="cpw_confirm" autocomplete="new-password" onkeydown="if(event.key==='Enter')submitChangePassword();" />
+      <div id="cpw_msg" style="min-height: 1.2rem; margin-top: 0.5rem; font-size: 0.85rem;"></div>
+      <div class="row" style="justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem;">
+        <button class="secondary" id="cpw_cancel" onclick="hideChangePasswordModal()">Cancel</button>
+        <button onclick="submitChangePassword()">Change Password</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       MODAL: Add user
+       ============================================================ -->
+  <div id="addUserModal" class="of-modal hidden">
+    <div class="of-modal-card">
+      <h3>Add User</h3>
+      <label for="newuser_name">Username</label>
+      <input type="text" id="newuser_name" autocomplete="off" autocapitalize="none" placeholder="2-32 chars: letters, digits, _ . -" />
+      <label for="newuser_pw" style="margin-top: 0.75rem;">Initial password</label>
+      <input type="password" id="newuser_pw" autocomplete="new-password" placeholder="At least 4 characters" />
+      <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.9rem; cursor: pointer;">
+        <input type="checkbox" id="newuser_must_change" checked style="width: auto; margin: 0;" />
+        Force password change on first login
+      </label>
+      <div id="newuser_msg" style="min-height: 1.2rem; margin-top: 0.5rem; font-size: 0.85rem;"></div>
+      <div class="row" style="justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem;">
+        <button class="secondary" onclick="hideAddUserModal()">Cancel</button>
+        <button onclick="submitAddUser()">Add User</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       MODAL: Reset password (admin → another user)
+       ============================================================ -->
+  <div id="resetPwModal" class="of-modal hidden">
+    <div class="of-modal-card">
+      <h3>Reset Password</h3>
+      <p class="muted" style="font-size: 0.9rem; margin: 0 0 1rem;">
+        Reset password for <strong id="resetpw_username"></strong>.
+        They will be required to change it on next login.
+      </p>
+      <label for="resetpw_new">New password</label>
+      <input type="password" id="resetpw_new" autocomplete="new-password" placeholder="At least 4 characters" onkeydown="if(event.key==='Enter')submitResetPassword();" />
+      <div id="resetpw_msg" style="min-height: 1.2rem; margin-top: 0.5rem; font-size: 0.85rem;"></div>
+      <div class="row" style="justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem;">
+        <button class="secondary" onclick="hideResetPasswordModal()">Cancel</button>
+        <button onclick="submitResetPassword()">Reset Password</button>
+      </div>
+    </div>
   </div>
 
 
@@ -1394,6 +1544,7 @@
       if (name === 'queue') loadQueueTab();
       if (name === 'stats') loadStatsTab();
       if (name === 'sequences') loadSnapshots();
+      if (name === 'users') loadUsers();
     }
 
     function copyShowToken() {
@@ -1423,25 +1574,70 @@
       e.textContent = text;
     }
 
+    // Track current user so other UI can read it (e.g. Users tab disables
+    // delete-self button, header shows username).
+    window._ofCurrentUser = null;
+
     async function checkAuth() {
       const r = await api('/me');
-      if (r.ok) { hide('loginView'); show('appView'); await loadAll(); }
-      else { show('loginView'); hide('appView'); }
+      if (r.ok) {
+        window._ofCurrentUser = r.data;
+        renderHeaderUser();
+        hide('loginView'); show('appView');
+        await loadAll();
+        if (r.data?.mustChangePassword) showChangePasswordModal(true);
+      } else {
+        show('loginView'); hide('appView');
+      }
     }
 
     async function login() {
+      const username = document.getElementById('loginUsername').value.trim();
       const password = document.getElementById('loginPassword').value;
+      const rememberMe = document.getElementById('loginRememberMe').checked;
+      if (!username || !password) {
+        msg('loginMsg', 'Username and password are required', false);
+        return;
+      }
       const r = await api('/login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ username, password, rememberMe }),
       });
-      if (r.ok) { hide('loginView'); show('appView'); await loadAll(); }
-      else { msg('loginMsg', (r.data?.error) || 'Login failed', false); }
+      if (r.ok) {
+        // Capture current user from /me after login (login response doesn't include id)
+        const me = await api('/me');
+        if (me.ok) window._ofCurrentUser = me.data;
+        renderHeaderUser();
+        hide('loginView'); show('appView');
+        await loadAll();
+        if (r.data?.mustChangePassword) showChangePasswordModal(true);
+        // Clear sensitive fields
+        document.getElementById('loginPassword').value = '';
+      } else {
+        msg('loginMsg', (r.data?.error) || 'Login failed', false);
+      }
     }
 
     async function logout() {
       await api('/logout', { method: 'POST' });
+      window._ofCurrentUser = null;
       show('loginView'); hide('appView');
+      document.getElementById('loginPassword').value = '';
+      document.getElementById('loginMsg').textContent = '';
+    }
+
+    function renderHeaderUser() {
+      const slot = document.getElementById('headerUserSlot');
+      if (!slot) return;
+      const u = window._ofCurrentUser;
+      if (!u) { slot.innerHTML = ''; return; }
+      slot.innerHTML = `
+        <span class="header-user">
+          <span class="header-user-name">${escapeHtml(u.username)}</span>
+          <button class="header-user-btn" onclick="showChangePasswordModal()" title="Change my password">🔑</button>
+          <button class="header-user-btn" onclick="logout()" title="Log out">Log out</button>
+        </span>
+      `;
     }
 
     async function loadAll() {
@@ -1466,6 +1662,8 @@
       setVal('cfg_jukebox_queue_depth', c.jukebox_queue_depth);
       setVal('cfg_jukebox_sequence_request_limit', c.jukebox_sequence_request_limit);
       setChk('cfg_prevent_multiple_requests', c.prevent_multiple_requests);
+      setVal('cfg_viewer_request_limit', c.viewer_request_limit || 1);
+      updateViewerRequestLimitVisibility();
       setChk('cfg_prevent_multiple_votes', c.prevent_multiple_votes);
       setChk('cfg_reset_votes_after_round', c.reset_votes_after_round);
       setChk('cfg_play_psa_enabled', c.play_psa_enabled);
@@ -1482,6 +1680,14 @@
       setChk('cfg_page_snow_enabled', c.page_snow_enabled);
       loadCustomColorState(c.player_custom_color || '');
       updatePlayerCustomColorVisibility();
+    }
+
+    function updateViewerRequestLimitVisibility() {
+      const chk = document.getElementById('cfg_prevent_multiple_requests');
+      const inp = document.getElementById('cfg_viewer_request_limit');
+      if (!chk || !inp) return;
+      inp.disabled = !chk.checked;
+      inp.style.opacity = chk.checked ? '1' : '0.5';
     }
 
     function updatePlayerCustomColorVisibility() {
@@ -2220,6 +2426,176 @@
       return String(s || '').replace(/[&<>"']/g, c => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       }[c]));
+    }
+
+    // ============================================================
+    // Users management
+    // ============================================================
+
+    async function loadUsers() {
+      const list = document.getElementById('usersList');
+      if (!list) return;
+      const r = await api('/users');
+      if (!r.ok) {
+        list.innerHTML = '<div class="muted" style="text-align:center;padding:1rem;">Failed to load users</div>';
+        return;
+      }
+      const users = r.data?.users || [];
+      const me = window._ofCurrentUser;
+      list.innerHTML = users.map(u => {
+        const isMe = me && u.id === me.userId;
+        const lastLogin = u.last_login_at
+          ? new Date(u.last_login_at + (u.last_login_at.includes('Z') ? '' : 'Z')).toLocaleString()
+          : 'never';
+        return `
+          <div class="row" style="background: var(--bg-input); padding: 0.75rem; border-radius: 6px;
+                                  align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 220px;">
+              <div style="font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
+                ${escapeHtml(u.username)}
+                ${isMe ? '<span style="font-size: 0.7rem; padding: 0.1rem 0.4rem; background: rgba(255,255,255,0.15); border-radius: 4px;">YOU</span>' : ''}
+                ${!u.enabled ? '<span style="font-size: 0.7rem; padding: 0.1rem 0.4rem; background: rgba(239,68,68,0.3); color: #ef4444; border-radius: 4px;">DISABLED</span>' : ''}
+                ${u.must_change_password ? '<span style="font-size: 0.7rem; padding: 0.1rem 0.4rem; background: rgba(248,123,2,0.3); color: orange; border-radius: 4px;">MUST CHANGE PW</span>' : ''}
+              </div>
+              <div class="muted" style="font-size: 0.8rem; margin-top: 0.2rem;">
+                Last login: ${lastLogin}${u.remember_me ? ' · 30-day session' : ''}
+              </div>
+            </div>
+            <div class="row" style="gap: 0.4rem; margin: 0;">
+              <button class="secondary" onclick="showResetPasswordModal(${u.id}, ${JSON.stringify(u.username).replace(/"/g, '&quot;')})" style="font-size:0.85rem; padding:0.4rem 0.7rem;">Reset PW</button>
+              ${u.enabled
+                ? `<button class="secondary" onclick="toggleUserEnabled(${u.id}, false)" style="font-size:0.85rem; padding:0.4rem 0.7rem;" ${isMe ? 'disabled title="Cannot disable yourself"' : ''}>Disable</button>`
+                : `<button class="secondary" onclick="toggleUserEnabled(${u.id}, true)" style="font-size:0.85rem; padding:0.4rem 0.7rem;">Enable</button>`}
+              <button class="danger" onclick="deleteUser(${u.id}, ${JSON.stringify(u.username).replace(/"/g, '&quot;')})" style="font-size:0.85rem; padding:0.4rem 0.7rem;" ${isMe ? 'disabled title="Cannot delete yourself"' : ''}>Delete</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function showAddUserModal() {
+      document.getElementById('newuser_name').value = '';
+      document.getElementById('newuser_pw').value = '';
+      document.getElementById('newuser_must_change').checked = true;
+      document.getElementById('newuser_msg').textContent = '';
+      document.getElementById('addUserModal').classList.remove('hidden');
+      setTimeout(() => document.getElementById('newuser_name').focus(), 50);
+    }
+    function hideAddUserModal() {
+      document.getElementById('addUserModal').classList.add('hidden');
+    }
+    async function submitAddUser() {
+      const username = document.getElementById('newuser_name').value.trim();
+      const password = document.getElementById('newuser_pw').value;
+      const mustChangePassword = document.getElementById('newuser_must_change').checked;
+      const msgEl = document.getElementById('newuser_msg');
+      msgEl.style.color = 'var(--accent, #ef4444)';
+      if (!username) { msgEl.textContent = 'Username required'; return; }
+      if (!password || password.length < 4) { msgEl.textContent = 'Password must be at least 4 characters'; return; }
+      const r = await api('/users', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, mustChangePassword }),
+      });
+      if (r.ok) { hideAddUserModal(); loadUsers(); }
+      else { msgEl.textContent = r.data?.error || 'Add failed'; }
+    }
+
+    let _resetpw_id = null;
+    function showResetPasswordModal(id, username) {
+      _resetpw_id = id;
+      document.getElementById('resetpw_username').textContent = username;
+      document.getElementById('resetpw_new').value = '';
+      document.getElementById('resetpw_msg').textContent = '';
+      document.getElementById('resetPwModal').classList.remove('hidden');
+      setTimeout(() => document.getElementById('resetpw_new').focus(), 50);
+    }
+    function hideResetPasswordModal() {
+      document.getElementById('resetPwModal').classList.add('hidden');
+      _resetpw_id = null;
+    }
+    async function submitResetPassword() {
+      if (!_resetpw_id) return;
+      const newPassword = document.getElementById('resetpw_new').value;
+      const msgEl = document.getElementById('resetpw_msg');
+      msgEl.style.color = 'var(--accent, #ef4444)';
+      if (!newPassword || newPassword.length < 4) {
+        msgEl.textContent = 'Password must be at least 4 characters';
+        return;
+      }
+      const r = await api('/users/' + _resetpw_id + '/reset-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPassword }),
+      });
+      if (r.ok) { hideResetPasswordModal(); loadUsers(); }
+      else { msgEl.textContent = r.data?.error || 'Reset failed'; }
+    }
+
+    async function toggleUserEnabled(id, enabled) {
+      const r = await api('/users/' + id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      if (r.ok) loadUsers();
+      else alert(r.data?.error || 'Update failed');
+    }
+
+    async function deleteUser(id, username) {
+      if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+      const r = await api('/users/' + id, { method: 'DELETE' });
+      if (r.ok) loadUsers();
+      else alert(r.data?.error || 'Delete failed');
+    }
+
+    // ============================================================
+    // Change own password (modal)
+    // ============================================================
+
+    function showChangePasswordModal(forced) {
+      document.getElementById('cpw_current').value = '';
+      document.getElementById('cpw_new').value = '';
+      document.getElementById('cpw_confirm').value = '';
+      document.getElementById('cpw_msg').textContent = '';
+      const title = document.getElementById('changePasswordTitle');
+      const subtitle = document.getElementById('changePasswordSubtitle');
+      const cancelBtn = document.getElementById('cpw_cancel');
+      if (forced) {
+        title.textContent = 'Change Password Required';
+        subtitle.textContent = 'You must change your password before continuing.';
+        cancelBtn.style.display = 'none';
+      } else {
+        title.textContent = 'Change Password';
+        subtitle.textContent = 'Enter your current password and a new one.';
+        cancelBtn.style.display = '';
+      }
+      document.getElementById('changePasswordModal').classList.remove('hidden');
+      setTimeout(() => document.getElementById('cpw_current').focus(), 50);
+    }
+    function hideChangePasswordModal() {
+      document.getElementById('changePasswordModal').classList.add('hidden');
+    }
+    async function submitChangePassword() {
+      const currentPassword = document.getElementById('cpw_current').value;
+      const newPassword = document.getElementById('cpw_new').value;
+      const confirm = document.getElementById('cpw_confirm').value;
+      const msgEl = document.getElementById('cpw_msg');
+      msgEl.style.color = 'var(--accent, #ef4444)';
+      if (!currentPassword) { msgEl.textContent = 'Enter your current password'; return; }
+      if (!newPassword || newPassword.length < 4) { msgEl.textContent = 'New password must be at least 4 characters'; return; }
+      if (newPassword !== confirm) { msgEl.textContent = 'New password and confirmation don\'t match'; return; }
+      const r = await api('/change-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      if (r.ok) {
+        msgEl.style.color = 'var(--success, #16a34a)';
+        msgEl.textContent = '✓ Password changed';
+        // Refresh /me so mustChangePassword flag clears
+        const me = await api('/me');
+        if (me.ok) window._ofCurrentUser = me.data;
+        setTimeout(hideChangePasswordModal, 800);
+      } else {
+        msgEl.textContent = r.data?.error || 'Change failed';
+      }
     }
 
     checkAuth();
