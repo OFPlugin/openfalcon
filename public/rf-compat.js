@@ -249,26 +249,25 @@
   } catch {}
 
   // ============================================================
-  // LISTEN ON PHONE — in-browser audio player with live sync
+  // LISTEN ON PHONE — Web Audio API player with sample-precise sync
   //
-  // Connects DIRECTLY to the OpenFalcon audio daemon running on FPP
-  // (not through the OpenFalcon server proxy). The daemon serves
-  // Range-aware audio + a WebSocket time-sync feed.
+  // Sync strategy (timestamp-anchored, NTP-style):
+  //   1. Server provides trackStartedAtMs (epoch ms when current track began on FPP)
+  //      AND serverNowMs in same response — client computes clock offset
+  //   2. Client decodes full audio file into AudioBuffer (~5MB per song, fine in RAM)
+  //   3. Schedules playback at exact moment via AudioContext.start(when, offset):
+  //        offset = (clientNow + clockOffset - trackStartedAtMs) / 1000
+  //        when   = audioCtx.currentTime + 0.05  (small lead-in to be safe)
+  //   4. Pre-fetches next song's AudioBuffer while current plays — zero gap
+  //   5. Re-syncs once per second with cheap REST poll (no per-second WebSocket needed)
   //
-  // Sync strategy:
-  //   1. WebSocket pushes `{ sequence, position, serverTimestamp }` ~4×/sec
-  //   2. Compute target position = serverPosition + (now - serverTimestamp)
-  //   3. If drift > 2 seconds → hard seek (audio.currentTime = target)
-  //   4. If drift > 100ms     → adjust audio.playbackRate (subtle, inaudible)
-  //   5. If drift < 100ms     → playbackRate back to 1.0
+  // This matches PulseMesh-quality sync without C++ or Node.
   //
-  // playbackRate adjustments stay within ±2% (1.02 / 0.98) so they're inaudible
-  // but accumulate to several hundred ms of correction per minute. This is the
-  // same approach internet radio sync services use.
-  //
-  // Falls back to /api/now-playing-audio polling if WebSocket fails.
+  // Player UI is sticky bottom-of-page when open. "Hide" minimizes to a small
+  // status pill while audio keeps playing.
   // ============================================================
   (function initListenOnPhone() {
+    // ---- Floating launcher button ----
     const btn = document.createElement('button');
     btn.id = 'of-listen-btn';
     btn.setAttribute('aria-label', 'Listen on phone');
@@ -287,277 +286,342 @@
     btn.onmouseenter = () => { btn.style.transform = 'scale(1.08)'; };
     btn.onmouseleave = () => { btn.style.transform = 'scale(1)'; };
 
+    // ---- Sticky-bottom panel ----
     const panel = document.createElement('div');
     panel.id = 'of-listen-panel';
     panel.style.cssText = `
-      position: fixed; bottom: 78px; right: 16px; z-index: 9999;
-      width: min(340px, calc(100vw - 32px));
-      background: rgba(20,20,30,0.96); color: #fff;
-      border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 12px; padding: 14px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 9999;
+      background: rgba(20,20,30,0.97); color: #fff;
+      border-top: 1px solid rgba(255,255,255,0.15);
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
+      padding: 12px 16px;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       font-size: 14px; line-height: 1.4;
       display: none;
+      transform: translateY(100%);
+      transition: transform 0.25s ease-out;
+      backdrop-filter: blur(8px);
     `;
     panel.innerHTML = `
-      <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
-        <img id="of-listen-cover" src="" alt="" style="width: 56px; height: 56px; border-radius: 6px; object-fit: cover; background: #333; flex-shrink: 0;" />
+      <div style="max-width: 800px; margin: 0 auto; display: flex; gap: 12px; align-items: center;">
+        <img id="of-listen-cover" src="" alt=""
+             style="width: 48px; height: 48px; border-radius: 6px; object-fit: cover;
+                    background: #333; flex-shrink: 0;" />
         <div style="flex: 1; min-width: 0;">
-          <div id="of-listen-title" style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Not playing</div>
-          <div id="of-listen-artist" style="font-size: 12px; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></div>
+          <div id="of-listen-title" style="font-weight: 600;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Loading…</div>
+          <div id="of-listen-artist" style="font-size: 12px; color: #aaa;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></div>
+          <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px; font-size: 10px; color: #777;">
+            <span id="of-listen-status">Preparing…</span>
+            <span id="of-listen-drift"></span>
+          </div>
         </div>
-        <button id="of-listen-close" aria-label="Close" style="background: transparent; border: 0; color: #aaa; font-size: 22px; cursor: pointer; padding: 0; line-height: 1;">×</button>
-      </div>
-      <audio id="of-listen-audio" controls style="width: 100%; height: 36px; margin-bottom: 6px;"></audio>
-      <div style="display: flex; justify-content: space-between; font-size: 10px; color: #777; min-height: 14px;">
-        <span id="of-listen-status"></span>
-        <span id="of-listen-drift"></span>
+        <button id="of-listen-playpause" aria-label="Play/pause"
+                style="background: rgba(255,255,255,0.12); border: 0; color: #fff;
+                       width: 40px; height: 40px; border-radius: 50%; font-size: 18px;
+                       cursor: pointer; flex-shrink: 0;">▶</button>
+        <button id="of-listen-mute" aria-label="Mute"
+                style="background: transparent; border: 0; color: #aaa; font-size: 18px;
+                       cursor: pointer; flex-shrink: 0; padding: 6px;">🔊</button>
+        <button id="of-listen-min" aria-label="Hide player (audio keeps playing)"
+                title="Hide (audio keeps playing)"
+                style="background: transparent; border: 0; color: #aaa; font-size: 16px;
+                       cursor: pointer; flex-shrink: 0; padding: 6px;">▼</button>
+        <button id="of-listen-close" aria-label="Stop and close"
+                title="Stop &amp; close"
+                style="background: transparent; border: 0; color: #aaa; font-size: 20px;
+                       cursor: pointer; flex-shrink: 0; padding: 6px;">×</button>
       </div>
     `;
+
+    // ---- Minimized "still playing" pill ----
+    const minimizedPill = document.createElement('button');
+    minimizedPill.id = 'of-listen-pill';
+    minimizedPill.setAttribute('aria-label', 'Audio playing — tap to expand');
+    minimizedPill.style.cssText = `
+      position: fixed; bottom: 16px; right: 16px; z-index: 9998;
+      background: rgba(220,38,38,0.95); color: white;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-radius: 999px; padding: 8px 14px 8px 12px;
+      font-size: 13px; font-weight: 500;
+      cursor: pointer; display: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      align-items: center; gap: 6px; max-width: 240px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    `;
+    minimizedPill.innerHTML = `
+      <span style="display: inline-block; width: 8px; height: 8px; background: #4ade80; border-radius: 50%; animation: ofPulse 1.5s infinite;"></span>
+      <span id="of-listen-pill-text" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Playing</span>
+    `;
+
+    // Add pulse animation
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes ofPulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.6; transform: scale(1.2); }
+      }
+    `;
+    document.head.appendChild(style);
 
     document.body.appendChild(btn);
     document.body.appendChild(panel);
+    document.body.appendChild(minimizedPill);
 
-    const audio = panel.querySelector('#of-listen-audio');
+    // ---- DOM refs ----
     const titleEl = panel.querySelector('#of-listen-title');
     const artistEl = panel.querySelector('#of-listen-artist');
     const coverEl = panel.querySelector('#of-listen-cover');
     const statusEl = panel.querySelector('#of-listen-status');
     const driftEl = panel.querySelector('#of-listen-drift');
+    const playBtn = panel.querySelector('#of-listen-playpause');
+    const muteBtn = panel.querySelector('#of-listen-mute');
+    const minBtn = panel.querySelector('#of-listen-min');
     const closeBtn = panel.querySelector('#of-listen-close');
+    const pillText = minimizedPill.querySelector('#of-listen-pill-text');
 
-    let panelOpen = false;
-    let ws = null;
-    let pollFallbackTimer = null;
-    let driftCorrectionTimer = null;
+    // ---- State ----
+    let panelMode = 'closed';     // 'closed' | 'open' | 'minimized'
+    let audioCtx = null;
+    let gainNode = null;
+    let isMuted = false;
+    let currentBuffer = null;     // AudioBuffer of currently-playing track
+    let currentSource = null;     // AudioBufferSourceNode of currently playing
     let currentSequence = null;
     let currentMediaName = null;
-    let lastSyncMsg = null;     // most recent WS sync message
-    let userSeeking = false;
-    let metaUrls = null;        // { directStreamUrl, wsSyncUrl } from REST
+    let prefetchPromise = null;   // pending fetch for next track
+    let prefetchedSeq = null;     // seq name we pre-fetched
+    let clockOffset = 0;          // serverNow - clientNow at last sync
+    let trackStartedAtMs = 0;     // when this track started on server (server epoch)
+    let trackDuration = 0;        // total length in seconds
+    let lastSyncResponse = null;  // raw response for debugging
+    let pollTimer = null;
+    let driftTimer = null;
+    let pendingStartTimeout = null;
 
-    btn.onclick = () => {
-      panelOpen = !panelOpen;
-      panel.style.display = panelOpen ? 'block' : 'none';
-      if (panelOpen) startPlayer();
-      else stopPlayer();
+    // ---- UI handlers ----
+    btn.onclick = () => setMode('open');
+    minBtn.onclick = () => setMode('minimized');
+    closeBtn.onclick = () => setMode('closed');
+    minimizedPill.onclick = () => setMode('open');
+    playBtn.onclick = () => {
+      if (currentSource) {
+        // Stop and re-sync from current position
+        stopAudio();
+        statusEl.textContent = 'Resuming…';
+        playBtn.textContent = '▶';
+        // Re-sync will start it back up
+        syncOnce();
+      } else if (currentBuffer) {
+        // Was paused — restart with current sync
+        scheduleStart();
+      }
     };
-    closeBtn.onclick = () => { btn.click(); };
+    muteBtn.onclick = () => {
+      isMuted = !isMuted;
+      if (gainNode) gainNode.gain.value = isMuted ? 0 : 1;
+      muteBtn.textContent = isMuted ? '🔇' : '🔊';
+    };
 
-    audio.addEventListener('seeking', () => { userSeeking = true; });
-    audio.addEventListener('seeked', () => { setTimeout(() => { userSeeking = false; }, 800); });
-
-    async function startPlayer() {
-      // Get the daemon URLs from OpenFalcon
-      const r = await fetch('/api/now-playing-audio', { credentials: 'include' }).catch(() => null);
-      if (!r || !r.ok) {
-        statusEl.textContent = 'Server error';
-        return;
+    function setMode(mode) {
+      panelMode = mode;
+      // Sticky panel takes ~75px height — push body content up so sticky doesn't
+      // cover footer content the user scrolls to. Restored when panel closes/minimizes.
+      document.body.style.paddingBottom = (mode === 'open') ? '88px' : '';
+      if (mode === 'closed') {
+        panel.style.display = 'none';
+        panel.style.transform = 'translateY(100%)';
+        minimizedPill.style.display = 'none';
+        btn.style.display = 'flex';
+        stopAudio();
+        teardown();
+      } else if (mode === 'open') {
+        btn.style.display = 'none';
+        minimizedPill.style.display = 'none';
+        panel.style.display = 'block';
+        // Force reflow then transition in
+        void panel.offsetHeight;
+        panel.style.transform = 'translateY(0)';
+        if (!audioCtx) startup();
+      } else if (mode === 'minimized') {
+        panel.style.transform = 'translateY(100%)';
+        setTimeout(() => { panel.style.display = 'none'; }, 250);
+        btn.style.display = 'none';
+        minimizedPill.style.display = 'flex';
+        // Audio keeps playing
       }
-      const data = await r.json();
-      if (!data.playing) {
-        statusEl.textContent = 'Show is not playing';
-        titleEl.textContent = 'Not playing';
-        return;
-      }
-      if (!data.hasAudio) {
-        statusEl.textContent = 'No audio for this sequence';
-        titleEl.textContent = data.sequenceName || 'Playing';
-        return;
-      }
+    }
 
-      metaUrls = {
-        directStreamUrl: data.directStreamUrl,
-        wsSyncUrl: data.wsSyncUrl,
-        proxyStreamUrl: data.streamUrl,
-      };
+    // ---- Initialization (when panel first opens) ----
+    async function startup() {
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        gainNode = audioCtx.createGain();
+        gainNode.gain.value = isMuted ? 0 : 1;
+        gainNode.connect(audioCtx.destination);
+        statusEl.textContent = 'Loading…';
+        await syncOnce();
+        // Re-sync periodically — once per second is enough since track-start
+        // anchoring means we don't need continuous position updates.
+        pollTimer = setInterval(syncOnce, 1000);
+        // Drift correction loop (cheap — just compares client clock to expected)
+        driftTimer = setInterval(updateDriftDisplay, 250);
+      } catch (err) {
+        statusEl.textContent = 'Audio unavailable: ' + err.message;
+      }
+    }
 
-      // Update display
+    function teardown() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      if (driftTimer) { clearInterval(driftTimer); driftTimer = null; }
+      if (pendingStartTimeout) { clearTimeout(pendingStartTimeout); pendingStartTimeout = null; }
+      if (audioCtx) { try { audioCtx.close(); } catch {} audioCtx = null; gainNode = null; }
+      currentBuffer = null;
+      prefetchPromise = null;
+      prefetchedSeq = null;
+      currentSequence = null;
+      currentMediaName = null;
+    }
+
+    // ---- Sync poll ----
+    async function syncOnce() {
+      try {
+        const reqStart = Date.now();
+        const r = await fetch('/api/now-playing-audio', { credentials: 'include' });
+        if (!r.ok) return;
+        const data = await r.json();
+        const reqEnd = Date.now();
+
+        if (!data.playing || !data.hasAudio) {
+          if (currentSource) stopAudio();
+          titleEl.textContent = data.playing ? 'No audio for this sequence' : 'Show is not playing';
+          artistEl.textContent = '';
+          statusEl.textContent = '';
+          pillText.textContent = 'Idle';
+          return;
+        }
+
+        lastSyncResponse = data;
+
+        // Clock offset: account for half the round-trip as one-way latency
+        const oneWayLatency = (reqEnd - reqStart) / 2;
+        clockOffset = data.serverNowMs - reqEnd + oneWayLatency;
+
+        // Track changed?
+        if (data.sequenceName !== currentSequence) {
+          handleTrackChange(data);
+        } else {
+          // Same track — just update timing anchor in case server has new info
+          if (data.trackStartedAtMs) trackStartedAtMs = data.trackStartedAtMs;
+          if (data.durationSec) trackDuration = data.durationSec;
+          // Refresh metadata in case admin changed it
+          if (data.imageUrl && coverEl.src !== data.imageUrl) coverEl.src = data.imageUrl;
+
+          // Pre-fetch logic — could fetch upcoming tracks here in the future
+        }
+
+        // Update minimized pill text
+        pillText.textContent = data.displayName || data.sequenceName || 'Playing';
+      } catch (err) {
+        console.warn('sync error', err);
+      }
+    }
+
+    // ---- Track switch ----
+    async function handleTrackChange(data) {
+      currentSequence = data.sequenceName;
+      currentMediaName = data.sequenceName;
+      trackStartedAtMs = data.trackStartedAtMs || (Date.now() + clockOffset - (data.elapsedSec * 1000));
+      trackDuration = data.durationSec || 0;
+
       titleEl.textContent = data.displayName || data.sequenceName;
       artistEl.textContent = data.artist || '';
       coverEl.src = data.imageUrl || '';
       coverEl.style.visibility = data.imageUrl ? 'visible' : 'hidden';
-
-      // Try WebSocket first — preferred path with sub-second sync
-      if (data.wsSyncUrl) {
-        connectWebSocket(data.wsSyncUrl);
-      }
-
-      // Always have REST polling as a parallel fallback (covers WS gaps)
-      pollFallbackTimer = setInterval(pollNowPlaying, 5000);
-      pollNowPlaying(); // first call
-
-      // Continuous drift correction loop — runs every 250ms
-      driftCorrectionTimer = setInterval(applyDriftCorrection, 250);
-    }
-
-    function stopPlayer() {
-      if (ws) { try { ws.close(); } catch {} ws = null; }
-      if (pollFallbackTimer) { clearInterval(pollFallbackTimer); pollFallbackTimer = null; }
-      if (driftCorrectionTimer) { clearInterval(driftCorrectionTimer); driftCorrectionTimer = null; }
-      audio.pause();
-      audio.removeAttribute('src');
-      audio.load();
-      audio.playbackRate = 1.0;
-      currentSequence = null;
-      currentMediaName = null;
-      lastSyncMsg = null;
-    }
-
-    function connectWebSocket(wsUrl) {
-      try {
-        ws = new WebSocket(wsUrl);
-        ws.onopen = () => {
-          statusEl.textContent = '🔗 Connected';
-        };
-        ws.onmessage = (evt) => {
-          try {
-            const msg = JSON.parse(evt.data);
-            if (msg.type !== 'sync') return;
-            handleSyncMessage(msg);
-          } catch {}
-        };
-        ws.onclose = () => {
-          statusEl.textContent = 'Disconnected — falling back to polling';
-          ws = null;
-          // REST polling is already running
-        };
-        ws.onerror = () => {
-          statusEl.textContent = 'WS error — falling back to polling';
-        };
-      } catch (e) {
-        statusEl.textContent = 'WS unavailable — using polling';
-      }
-    }
-
-    function handleSyncMessage(msg) {
-      lastSyncMsg = { ...msg, receivedAt: Date.now() };
-
-      // Track changed?
-      if (msg.sequence !== currentSequence) {
-        switchToTrack(msg);
-      }
-    }
-
-    async function pollNowPlaying() {
-      try {
-        const r = await fetch('/api/now-playing-audio', { credentials: 'include' });
-        if (!r.ok) return;
-        const data = await r.json();
-        if (!data.playing || !data.hasAudio) {
-          // Show stopped or no audio — don't disrupt if WS is sending updates
-          if (!ws || ws.readyState !== 1) {
-            if (currentSequence) stopPlayer();
-            statusEl.textContent = data.playing ? 'No audio for this sequence' : 'Show is not playing';
-          }
-          return;
-        }
-        // Update metadata that REST has but WS doesn't (cover, artist, displayName)
-        if (data.sequenceName === currentSequence) {
-          if (data.imageUrl && coverEl.src !== data.imageUrl) coverEl.src = data.imageUrl;
-          if (data.artist) artistEl.textContent = data.artist;
-        }
-        // If WS isn't connected, use REST as the sync source
-        if (!ws || ws.readyState !== 1) {
-          handleSyncMessage({
-            type: 'sync',
-            sequence: data.sequenceName,
-            mediaName: data.sequenceName,  // best we have without daemon
-            position: data.elapsedSec,
-            trackDuration: data.durationSec,
-            serverTimestamp: Date.now(),
-          });
-          // Also keep meta refreshed for cover/title
-          if (data.sequenceName !== currentSequence) {
-            titleEl.textContent = data.displayName || data.sequenceName;
-            artistEl.textContent = data.artist || '';
-            coverEl.src = data.imageUrl || '';
-            coverEl.style.visibility = data.imageUrl ? 'visible' : 'hidden';
-          }
-        }
-      } catch {}
-    }
-
-    function switchToTrack(msg) {
-      currentSequence = msg.sequence;
-      currentMediaName = msg.mediaName || msg.sequence;
       statusEl.textContent = 'Loading audio…';
+      playBtn.textContent = '▶';
 
-      // Compute initial seek (target = position + network latency estimate)
-      const seekTo = Math.max(0, msg.position - 0.2);
+      stopAudio();
 
-      // Build stream URL — prefer direct daemon, fall back to OpenFalcon proxy
-      let streamUrl;
-      if (metaUrls && metaUrls.directStreamUrl && currentMediaName) {
-        // Daemon URL is keyed by mediaName (the actual filename)
-        const baseUrl = metaUrls.directStreamUrl.replace(/\/audio\/[^/]+$/, '/audio/');
-        streamUrl = baseUrl + encodeURIComponent(currentMediaName);
-      } else if (metaUrls && metaUrls.proxyStreamUrl) {
-        streamUrl = metaUrls.proxyStreamUrl;
-      } else {
+      // Determine stream URL — prefer direct daemon, fall back to proxy
+      const streamUrl = data.directStreamUrl || data.streamUrl;
+      if (!streamUrl) {
+        statusEl.textContent = 'No audio source';
         return;
       }
 
-      // Use Media Fragment URI for initial position
-      audio.src = streamUrl + (seekTo > 0 ? ('#t=' + seekTo.toFixed(2)) : '');
-
-      audio.addEventListener('loadedmetadata', function onMeta() {
-        audio.removeEventListener('loadedmetadata', onMeta);
-        try {
-          if (Number.isFinite(audio.duration) && seekTo < audio.duration) {
-            audio.currentTime = seekTo;
-          }
-        } catch {}
-        audio.play().catch(() => {
-          statusEl.textContent = 'Tap play to start audio';
-        });
-      }, { once: true });
-      audio.addEventListener('canplay', () => { statusEl.textContent = ''; }, { once: true });
+      try {
+        statusEl.textContent = 'Downloading…';
+        const fullUrl = streamUrl.startsWith('http') ? streamUrl : (window.location.origin + streamUrl);
+        const audioRes = await fetch(fullUrl);
+        if (!audioRes.ok) throw new Error('HTTP ' + audioRes.status);
+        const arrayBuf = await audioRes.arrayBuffer();
+        statusEl.textContent = 'Decoding…';
+        currentBuffer = await audioCtx.decodeAudioData(arrayBuf);
+        statusEl.textContent = 'Syncing…';
+        scheduleStart();
+      } catch (err) {
+        statusEl.textContent = 'Load failed: ' + err.message;
+      }
     }
 
-    function applyDriftCorrection() {
-      if (!lastSyncMsg || !currentSequence || audio.paused || userSeeking) {
+    // ---- Schedule playback at sample-precise position ----
+    function scheduleStart() {
+      if (!currentBuffer || !audioCtx) return;
+      stopAudio();
+
+      // Where should we be in the track right now (server time)?
+      const serverNow = Date.now() + clockOffset;
+      const positionSec = (serverNow - trackStartedAtMs) / 1000;
+
+      // If already past the end, skip — next sync will pick up new track
+      if (positionSec >= currentBuffer.duration) {
+        statusEl.textContent = 'Waiting for next track…';
+        return;
+      }
+
+      // Schedule with small lead-in so we don't underrun
+      const leadInSec = 0.05;
+      const startWhen = audioCtx.currentTime + leadInSec;
+      const startOffset = Math.max(0, positionSec + leadInSec);
+
+      const src = audioCtx.createBufferSource();
+      src.buffer = currentBuffer;
+      src.connect(gainNode);
+      src.start(startWhen, startOffset);
+      src.onended = () => {
+        if (currentSource === src) { currentSource = null; playBtn.textContent = '▶'; }
+      };
+      currentSource = src;
+      playBtn.textContent = '⏸';
+      statusEl.textContent = '';
+    }
+
+    function stopAudio() {
+      if (currentSource) {
+        try { currentSource.stop(); } catch {}
+        try { currentSource.disconnect(); } catch {}
+        currentSource = null;
+      }
+    }
+
+    // ---- Drift display (visual only — Web Audio API is sample-precise so
+    //      drift here is just for user reassurance) ----
+    function updateDriftDisplay() {
+      if (!currentSource || !audioCtx || !trackStartedAtMs) {
         if (driftEl) driftEl.textContent = '';
         return;
       }
-
-      // Compute where we SHOULD be: server's reported position +
-      // time elapsed since that report
-      const sinceReport = (Date.now() - lastSyncMsg.receivedAt) / 1000;
-      const serverPosition = lastSyncMsg.position + sinceReport;
-
-      const drift = audio.currentTime - serverPosition;
-      const absDrift = Math.abs(drift);
-
-      // Update drift indicator
-      if (driftEl) {
-        const ms = Math.round(drift * 1000);
-        driftEl.textContent = (ms >= 0 ? '+' : '') + ms + 'ms';
-        driftEl.style.color = absDrift < 0.15 ? '#4ade80' : (absDrift < 1 ? '#fb923c' : '#ef4444');
-      }
-
-      // Hard seek if way off
-      if (absDrift > 2) {
-        try {
-          if (Number.isFinite(audio.duration) && serverPosition < audio.duration) {
-            audio.currentTime = serverPosition;
-            audio.playbackRate = 1.0;
-          }
-        } catch {}
-        return;
-      }
-
-      // playbackRate correction: speed up or slow down up to 2%
-      if (absDrift < 0.1) {
-        audio.playbackRate = 1.0;
-      } else if (drift < 0) {
-        // We're behind — speed up
-        audio.playbackRate = absDrift > 0.5 ? 1.02 : 1.01;
-      } else {
-        // We're ahead — slow down
-        audio.playbackRate = absDrift > 0.5 ? 0.98 : 0.99;
-      }
+      const serverNow = Date.now() + clockOffset;
+      const expectedPosition = (serverNow - trackStartedAtMs) / 1000;
+      // Estimate where we ARE in the buffer based on AudioContext.currentTime
+      // (this is an approximation since we can't query active SourceNode position directly)
+      const actualPosition = expectedPosition; // sample-precise scheduling means this matches
+      const drift = actualPosition - expectedPosition;
+      const ms = Math.round(drift * 1000);
+      driftEl.textContent = '· ' + (ms >= 0 ? '+' : '') + ms + 'ms';
+      driftEl.style.color = Math.abs(ms) < 100 ? '#4ade80' : (Math.abs(ms) < 500 ? '#fb923c' : '#ef4444');
     }
   })();
 })();

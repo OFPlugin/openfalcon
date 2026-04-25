@@ -339,6 +339,9 @@ router.get('/now-playing-audio', (req, res) => {
     durationSec: seq.duration_seconds || null,
     elapsedSec: Math.round(elapsedSec * 10) / 10,
     startedAt: np.started_at,
+    // Timestamp-anchored sync — Web Audio API uses these for sample-precise scheduling
+    trackStartedAtMs: startedAtMs,
+    serverNowMs: Date.now(),
     // Direct daemon URLs (Phase 2 — preferred). If null, viewer falls back to proxy.
     directStreamUrl,
     wsSyncUrl,
