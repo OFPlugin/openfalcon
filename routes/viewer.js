@@ -361,11 +361,19 @@ router.get('/audio-stream/:sequence', async (req, res) => {
 
     // Mirror the relevant headers from FPP
     res.status(upstream.status);
-    ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control'].forEach(h => {
+    ['content-length', 'content-range', 'accept-ranges', 'cache-control'].forEach(h => {
       const v = upstream.headers.get(h);
       if (v) res.setHeader(h, v);
     });
-    if (!upstream.headers.get('content-type')) res.setHeader('Content-Type', 'audio/mpeg');
+    // FPP returns `application/binary` for music files which makes some browsers
+    // treat the response as opaque and disables seeking. Force audio/mpeg.
+    const upstreamCt = (upstream.headers.get('content-type') || '').toLowerCase();
+    if (upstreamCt.startsWith('audio/')) {
+      res.setHeader('Content-Type', upstreamCt);
+    } else {
+      res.setHeader('Content-Type', 'audio/mpeg');
+    }
+    // Always advertise Accept-Ranges so browsers know they can seek
     if (!upstream.headers.get('accept-ranges')) res.setHeader('Accept-Ranges', 'bytes');
 
     // Stream the body through — Node 18+ supports response.body as ReadableStream

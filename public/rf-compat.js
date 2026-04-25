@@ -375,16 +375,21 @@
           coverEl.style.visibility = data.imageUrl ? 'visible' : 'hidden';
           statusEl.textContent = 'Loading audio…';
 
-          audio.src = data.streamUrl;
-          // Wait for metadata before seeking — required by browser audio API
+          // Use Media Fragment URI (#t=<seconds>) — most reliable way to start
+          // mid-track. Browsers treat this as initial seek, applied before play.
+          const seekTo = (data.elapsedSec > 1) ? Math.max(0, data.elapsedSec - 0.3) : 0;
+          audio.src = data.streamUrl + (seekTo > 0 ? ('#t=' + seekTo.toFixed(2)) : '');
+
+          // Belt-and-suspenders: also try setting currentTime once metadata loads
           audio.addEventListener('loadedmetadata', function onMeta() {
             audio.removeEventListener('loadedmetadata', onMeta);
             try {
-              if (data.elapsedSec > 0 && data.elapsedSec < (audio.duration || Infinity)) {
-                audio.currentTime = data.elapsedSec;
+              const dur = audio.duration;
+              if (seekTo > 0 && Number.isFinite(dur) && seekTo < dur) {
+                audio.currentTime = seekTo;
               }
             } catch (e) {}
-            audio.play().catch(err => {
+            audio.play().catch(() => {
               statusEl.textContent = 'Tap play to start audio';
             });
           }, { once: true });
