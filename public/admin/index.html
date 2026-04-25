@@ -819,7 +819,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.12.0</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.12.1</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1357,6 +1357,24 @@
             <h3>IP blocking</h3>
             <label for="cfg_blocked_ips">Blocked IPs (comma-separated, supports CIDR)</label>
             <textarea id="cfg_blocked_ips" rows="3" placeholder="e.g. 1.2.3.4, 10.0.0.0/24" onchange="saveSetting('blocked_ips', this.value)"></textarea>
+
+            <h3 style="margin-top: 1.25rem;">Audio distance gate <span class="muted" style="font-size: 0.8rem; font-weight: normal;">(copyright safety)</span></h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
+              Hides the audio player entirely if the listener is outside the configured radius.
+              Useful for shows playing copyrighted music to avoid streaming to listeners not physically present.
+              Uses the same Show coordinates set above.
+            </p>
+            <div class="row">
+              <input type="checkbox" id="cfg_audio_gate_enabled" onchange="saveSetting('audio_gate_enabled', this.checked ? 1 : 0); updateAudioGateVisibility();" />
+              <label for="cfg_audio_gate_enabled" style="margin: 0;">Restrict audio playback to listeners within radius</label>
+            </div>
+            <div class="row" id="cfg_audio_gate_radius_row" style="margin-top: 0.5rem; gap: 0.5rem; align-items: center;">
+              <label for="cfg_audio_gate_radius_miles" style="margin: 0;">Audio radius (miles):</label>
+              <input type="number" id="cfg_audio_gate_radius_miles" step="0.1" min="0.05" max="50"
+                     onchange="saveSetting('audio_gate_radius_miles', this.value)"
+                     style="max-width: 120px;" />
+              <span class="muted" style="font-size: 0.8rem;">— typically smaller than the interaction radius</span>
+            </div>
           </div>
         </div>
 
@@ -1479,6 +1497,26 @@
       <div class="row" style="justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem;">
         <button class="secondary" onclick="hideAddUserModal()">Cancel</button>
         <button onclick="submitAddUser()">Add User</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       MODAL: Edit user
+       ============================================================ -->
+  <div id="editUserModal" class="of-modal hidden">
+    <div class="of-modal-card">
+      <h3>Edit User</h3>
+      <label for="edituser_name">Username</label>
+      <input type="text" id="edituser_name" autocomplete="off" autocapitalize="none" placeholder="2-32 chars: letters, digits, _ . -" />
+      <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.9rem; cursor: pointer;">
+        <input type="checkbox" id="edituser_must_change" style="width: auto; margin: 0;" />
+        Force password change on next login
+      </label>
+      <div id="edituser_msg" style="min-height: 1.2rem; margin-top: 0.5rem; font-size: 0.85rem;"></div>
+      <div class="row" style="justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem;">
+        <button class="secondary" onclick="hideEditUserModal()">Cancel</button>
+        <button onclick="submitEditUser()">Save Changes</button>
       </div>
     </div>
   </div>
@@ -1672,6 +1710,9 @@
       setVal('cfg_show_latitude', c.show_latitude);
       setVal('cfg_show_longitude', c.show_longitude);
       setVal('cfg_check_radius_miles', c.check_radius_miles);
+      setChk('cfg_audio_gate_enabled', c.audio_gate_enabled);
+      setVal('cfg_audio_gate_radius_miles', c.audio_gate_radius_miles || 0.5);
+      updateAudioGateVisibility();
       setVal('cfg_hide_sequence_after_played', c.hide_sequence_after_played);
       setVal('cfg_blocked_ips', c.blocked_ips || '');
       setVal('cfg_public_base_url', c.public_base_url || '');
@@ -1688,6 +1729,14 @@
       if (!chk || !inp) return;
       inp.disabled = !chk.checked;
       inp.style.opacity = chk.checked ? '1' : '0.5';
+    }
+
+    function updateAudioGateVisibility() {
+      const chk = document.getElementById('cfg_audio_gate_enabled');
+      const row = document.getElementById('cfg_audio_gate_radius_row');
+      if (!chk || !row) return;
+      row.style.opacity = chk.checked ? '1' : '0.4';
+      row.style.pointerEvents = chk.checked ? '' : 'none';
     }
 
     function updatePlayerCustomColorVisibility() {
@@ -2462,6 +2511,7 @@
               </div>
             </div>
             <div class="row" style="gap: 0.4rem; margin: 0;">
+              <button class="secondary" onclick="showEditUserModal(${u.id}, ${JSON.stringify(u.username).replace(/"/g, '&quot;')}, ${u.must_change_password ? 1 : 0})" style="font-size:0.85rem; padding:0.4rem 0.7rem;">Edit</button>
               <button class="secondary" onclick="showResetPasswordModal(${u.id}, ${JSON.stringify(u.username).replace(/"/g, '&quot;')})" style="font-size:0.85rem; padding:0.4rem 0.7rem;">Reset PW</button>
               ${u.enabled
                 ? `<button class="secondary" onclick="toggleUserEnabled(${u.id}, false)" style="font-size:0.85rem; padding:0.4rem 0.7rem;" ${isMe ? 'disabled title="Cannot disable yourself"' : ''}>Disable</button>`
@@ -2498,6 +2548,47 @@
       });
       if (r.ok) { hideAddUserModal(); loadUsers(); }
       else { msgEl.textContent = r.data?.error || 'Add failed'; }
+    }
+
+    let _edituser_id = null;
+    function showEditUserModal(id, username, mustChangePassword) {
+      _edituser_id = id;
+      document.getElementById('edituser_name').value = username;
+      document.getElementById('edituser_must_change').checked = !!mustChangePassword;
+      document.getElementById('edituser_msg').textContent = '';
+      document.getElementById('editUserModal').classList.remove('hidden');
+      setTimeout(() => document.getElementById('edituser_name').focus(), 50);
+    }
+    function hideEditUserModal() {
+      document.getElementById('editUserModal').classList.add('hidden');
+      _edituser_id = null;
+    }
+    async function submitEditUser() {
+      if (!_edituser_id) return;
+      const username = document.getElementById('edituser_name').value.trim();
+      const mustChangePassword = document.getElementById('edituser_must_change').checked;
+      const msgEl = document.getElementById('edituser_msg');
+      msgEl.style.color = 'var(--accent, #ef4444)';
+      if (!username) { msgEl.textContent = 'Username required'; return; }
+      const r = await api('/users/' + _edituser_id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, mustChangePassword }),
+      });
+      if (r.ok) {
+        hideEditUserModal();
+        loadUsers();
+        // If we edited ourselves, refresh /me so header updates
+        const me = window._ofCurrentUser;
+        if (me && _edituser_id === me.userId) {
+          const refreshed = await api('/me');
+          if (refreshed.ok) {
+            window._ofCurrentUser = refreshed.data;
+            renderHeaderUser();
+          }
+        }
+      } else {
+        msgEl.textContent = r.data?.error || 'Update failed';
+      }
     }
 
     let _resetpw_id = null;

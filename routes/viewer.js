@@ -343,11 +343,32 @@ router.post('/jukebox/add', (req, res) => {
 // open the audio player. Cheap: just one config read.
 router.get('/visual-config', (req, res) => {
   const cfg = getConfig();
+  // Audio gate: same logic as now-playing-audio. Viewer's lat/lng (if shared)
+  // arrives via query params. If gate is enabled but viewer hasn't shared,
+  // block — same fail-closed behavior as the audio endpoint.
+  let audioGateBlocked = false;
+  let audioGateReason = '';
+  if (cfg.audio_gate_enabled === 1 && cfg.show_latitude && cfg.show_longitude) {
+    const lat = parseFloat(req.query.lat);
+    const lng = parseFloat(req.query.lng);
+    if (!isFinite(lat) || !isFinite(lng)) {
+      audioGateBlocked = true;
+      audioGateReason = 'Audio requires location access.';
+    } else {
+      const dist = distanceMiles(cfg.show_latitude, cfg.show_longitude, lat, lng);
+      if (dist > (cfg.audio_gate_radius_miles || 0.5)) {
+        audioGateBlocked = true;
+        audioGateReason = 'Audio is only available to listeners present at the show.';
+      }
+    }
+  }
   res.json({
     pageSnowEnabled: cfg.page_snow_enabled === 1,
     playerDecoration: cfg.player_decoration || 'none',
     playerDecorationAnimated: cfg.player_decoration_animated !== 0,
     playerCustomColor: cfg.player_custom_color || '',
+    audioGateBlocked,
+    audioGateReason,
   });
 });
 
@@ -355,12 +376,43 @@ router.get('/visual-config', (req, res) => {
 router.get('/now-playing-audio', (req, res) => {
   const np = getNowPlaying();
   const cfg = getConfig();
+
+  // Audio distance gating — used for copyright compliance to prevent listeners
+  // who aren't actually present at the show from streaming the audio.
+  // Viewer page passes ?lat=&lng= when geolocation is available. If the gate
+  // is enabled and we have a valid location for the viewer, check radius.
+  // If the gate is enabled but the viewer hasn't shared location, block too —
+  // we can't verify they're in range.
+  let audioGateBlocked = false;
+  let audioGateReason = '';
+  if (cfg.audio_gate_enabled === 1) {
+    if (!cfg.show_latitude || !cfg.show_longitude) {
+      // Admin enabled gate but didn't set show coords — fail open (otherwise
+      // they'd lock everyone out and not realize why).
+    } else {
+      const lat = parseFloat(req.query.lat);
+      const lng = parseFloat(req.query.lng);
+      if (!isFinite(lat) || !isFinite(lng)) {
+        audioGateBlocked = true;
+        audioGateReason = 'Audio playback requires location access. Please enable location sharing for this page and refresh.';
+      } else {
+        const dist = distanceMiles(cfg.show_latitude, cfg.show_longitude, lat, lng);
+        if (dist > (cfg.audio_gate_radius_miles || 0.5)) {
+          audioGateBlocked = true;
+          audioGateReason = `Audio is only available to listeners present at the show.`;
+        }
+      }
+    }
+  }
+
   // Visual settings that always apply regardless of playback state
   const visualConfig = {
     pageSnowEnabled: cfg.page_snow_enabled === 1,
     playerDecoration: cfg.player_decoration || 'none',
     playerDecorationAnimated: cfg.player_decoration_animated !== 0,
     playerCustomColor: cfg.player_custom_color || '',
+    audioGateBlocked,
+    audioGateReason,
   };
   if (!np || !np.sequence_name) {
     return res.json({ playing: false, ...visualConfig });

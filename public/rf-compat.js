@@ -62,6 +62,26 @@
     });
   }
 
+  // Best-effort location fetch for the audio gate. Doesn't show messages on
+  // failure — silently leaves cachedLocation null. The audio gate logic falls
+  // back to "blocked, please share location" when location is missing.
+  function tryGetLocationSilently() {
+    if (cachedLocation || !navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        cachedLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      },
+      () => { /* silently ignore — gate will block until user grants */ },
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 }
+    );
+  }
+
+  // Build query string with viewer location for endpoints that need it
+  function locationQuery() {
+    if (!cachedLocation) return '';
+    return `?lat=${encodeURIComponent(cachedLocation.lat)}&lng=${encodeURIComponent(cachedLocation.lng)}`;
+  }
+
   async function buildBody(baseBody) {
     const body = { ...baseBody };
     if (boot.requiresLocation) {
@@ -367,15 +387,45 @@
     // Poll for live admin toggle changes
     async function poll() {
       try {
-        const r = await fetch('/api/visual-config', { credentials: 'include' });
+        const r = await fetch('/api/visual-config' + locationQuery(), { credentials: 'include' });
         if (r.ok) {
           const data = await r.json();
           applySnowState(!!data.pageSnowEnabled);
+          applyAudioGateState(!!data.audioGateBlocked, data.audioGateReason || '');
         }
       } catch {}
     }
     setInterval(poll, 5000);
+    // Kick off location fetch immediately so the gate can resolve fast
+    tryGetLocationSilently();
+    // Re-poll once shortly after location resolves (silent) for fast unblock
+    setTimeout(poll, 2000);
   })();
+
+  // ============================================================
+  // AUDIO GATE — hides/shows the 🎧 launcher based on viewer distance
+  // (or location-permission state). When blocked, also forces any open
+  // player to stop and shows the reason text on the launcher area.
+  // ============================================================
+  let _audioGateBlocked = false;
+  let _audioGateReason = '';
+  function applyAudioGateState(blocked, reason) {
+    _audioGateBlocked = blocked;
+    _audioGateReason = reason;
+    const btn = document.getElementById('of-listen-btn');
+    const pill = document.getElementById('of-listen-minimized-pill');
+    const panel = document.getElementById('of-listen-panel');
+    if (btn) btn.style.display = blocked ? 'none' : '';
+    if (pill && blocked) pill.style.display = 'none';
+    if (panel && blocked) {
+      // Force-close the open player if user is now blocked (e.g. they walked away)
+      panel.style.display = 'none';
+      // Trigger stop via a custom event the player can listen to (or just clear audio)
+      try { window.dispatchEvent(new CustomEvent('openfalcon:audio-gate-blocked')); } catch {}
+    }
+  }
+  // Expose for diagnostics
+  window._ofAudioGate = () => ({ blocked: _audioGateBlocked, reason: _audioGateReason });
 
   (function initListenOnPhone() {
     // ---- Floating launcher button ----
@@ -391,10 +441,13 @@
       border: 2px solid rgba(255,255,255,0.4);
       font-size: 24px; cursor: pointer;
       box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-      transition: transform 0.15s, background 0.15s;
+      transition: transform 0.15s, background 0.15s, opacity 0.2s;
       padding: 0; line-height: 1;
       display: flex; align-items: center; justify-content: center;
     `;
+    // If audio gate is enabled, hide the button initially. The /api/visual-config
+    // poll will reveal it once the server confirms the viewer is in range.
+    if (boot.audioGateEnabled) btn.style.display = 'none';
     btn.onmouseenter = () => { btn.style.transform = 'scale(1.08)'; };
     btn.onmouseleave = () => { btn.style.transform = 'scale(1)'; };
 
@@ -779,10 +832,19 @@
     async function syncOnce() {
       try {
         const reqStart = Date.now();
-        const r = await fetch('/api/now-playing-audio', { credentials: 'include' });
+        const r = await fetch('/api/now-playing-audio' + locationQuery(), { credentials: 'include' });
         if (!r.ok) return;
         const data = await r.json();
         const reqEnd = Date.now();
+
+        // Server says viewer is outside the audio gate radius — stop audio
+        // and signal the launcher to hide. /api/visual-config polling will
+        // also pick this up but we react immediately when player is open.
+        if (data.audioGateBlocked) {
+          if (currentSource) stopAudio();
+          applyAudioGateState(true, data.audioGateReason || '');
+          return;
+        }
 
         if (!data.playing || !data.hasAudio) {
           if (currentSource) stopAudio();
@@ -1015,6 +1077,14 @@
         currentSource = null;
       }
     }
+
+    // If the audio gate fires during playback (e.g. user walked outside the
+    // radius and the next /api/visual-config poll reports blocked), stop audio
+    // immediately. The launcher button is also hidden by applyAudioGateState.
+    window.addEventListener('openfalcon:audio-gate-blocked', () => {
+      stopAudio();
+      if (statusEl) statusEl.textContent = 'Audio paused — outside show range';
+    });
 
     // ---- Drift display (visual only — Web Audio API is sample-precise so
     //      drift here is just for user reassurance) ----

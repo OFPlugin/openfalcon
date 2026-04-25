@@ -64,7 +64,17 @@ app.get('/', (req, res) => {
     const { renderTemplate, getActiveTemplate } = require('./lib/viewer-renderer');
     const { db, getConfig, getNowPlaying } = require('./lib/db');
 
-    const tpl = getActiveTemplate();
+    // Preview mode: render against a specific template's draft_html (or html
+    // if no draft). Used by the visual designer's live preview iframe.
+    let tpl;
+    if (req.query.preview) {
+      const id = parseInt(req.query.preview, 10);
+      if (Number.isFinite(id)) {
+        const row = db.prepare(`SELECT * FROM viewer_page_templates WHERE id = ?`).get(id);
+        if (row) tpl = { ...row, html: row.draft_html || row.html };
+      }
+    }
+    if (!tpl) tpl = getActiveTemplate();
     if (!tpl) {
       return res.status(500).send('<h1>No active viewer template</h1><p>Set one in admin.</p>');
     }

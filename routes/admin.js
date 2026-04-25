@@ -143,6 +143,8 @@ router.put('/config', requireAdmin, (req, res) => {
     'player_custom_color',
     // External access
     'public_base_url',
+    'audio_gate_enabled',
+    'audio_gate_radius_miles',
   ];
   const updates = {};
   for (const k of allowed) {
@@ -584,6 +586,93 @@ router.post('/templates/:id/duplicate', requireAdmin, (req, res) => {
     VALUES (?, ?, 0, 0)
   `).run(newName, row.html);
   res.json({ ok: true, id: result.lastInsertRowid });
+});
+
+// ============================================================
+// Visual Designer
+//
+// Settings & Blocks modes both generate HTML. We store the form values
+// (settings_json) and block layout (blocks_json) on the template row so
+// users can reopen and continue editing in those modes. The 'mode' column
+// records which mode produced the current html.
+//
+// Live preview workflow: client PATCHes pending values to /draft, server
+// re-renders draft_html and stores it. The viewer page can be loaded with
+// ?preview=<id> to render against the draft instead of html. Promote draft
+// to html with /commit when user clicks Save.
+// ============================================================
+
+router.get('/designer/blocks', requireAdmin, (req, res) => {
+  const { listBlockTypes } = require('../lib/visual-designer');
+  res.json({ blocks: listBlockTypes() });
+});
+
+router.get('/designer/defaults', requireAdmin, (req, res) => {
+  const { DEFAULT_SETTINGS } = require('../lib/visual-designer');
+  res.json({ settings: DEFAULT_SETTINGS });
+});
+
+// PATCH a draft for the active template (or one specified by ?id=).
+// Body: { mode: 'settings'|'blocks'|'code', settings, blocks, html }
+// Returns the rendered draft HTML so the client can refresh the preview.
+router.post('/templates/:id/draft', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare(`SELECT * FROM viewer_page_templates WHERE id = ?`).get(id);
+  if (!row) return res.status(404).json({ error: 'Template not found' });
+
+  const { renderSettingsTemplate, renderBlocksTemplate } = require('../lib/visual-designer');
+  const { mode, settings, blocks, html } = req.body || {};
+  let draftHtml = '';
+  let settingsJson = '';
+  let blocksJson = '';
+
+  if (mode === 'settings') {
+    draftHtml = renderSettingsTemplate(settings || {});
+    settingsJson = JSON.stringify(settings || {});
+  } else if (mode === 'blocks') {
+    draftHtml = renderBlocksTemplate(blocks || [], settings || {});
+    blocksJson = JSON.stringify(blocks || []);
+    settingsJson = JSON.stringify(settings || {});
+  } else {
+    // 'code' mode — html is authoritative
+    draftHtml = String(html || '');
+  }
+
+  const updates = ['draft_html = @draft_html', 'draft_updated_at = CURRENT_TIMESTAMP', 'mode = @mode'];
+  const params = { id, draft_html: draftHtml, mode: mode || 'code' };
+  if (settingsJson) { updates.push('settings_json = @settings_json'); params.settings_json = settingsJson; }
+  if (blocksJson) { updates.push('blocks_json = @blocks_json'); params.blocks_json = blocksJson; }
+  db.prepare(`UPDATE viewer_page_templates SET ${updates.join(', ')} WHERE id = @id`).run(params);
+
+  res.json({ ok: true, html: draftHtml });
+});
+
+// Commit the draft as the live HTML. Clears draft fields.
+router.post('/templates/:id/commit', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare(`SELECT * FROM viewer_page_templates WHERE id = ?`).get(id);
+  if (!row) return res.status(404).json({ error: 'Template not found' });
+  if (!row.draft_html) return res.status(400).json({ error: 'No draft to commit' });
+  db.prepare(`
+    UPDATE viewer_page_templates
+    SET html = draft_html,
+        draft_html = '',
+        draft_updated_at = NULL,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(id);
+  res.json({ ok: true });
+});
+
+// Discard the current draft and return to the saved html.
+router.post('/templates/:id/discard-draft', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  db.prepare(`
+    UPDATE viewer_page_templates
+    SET draft_html = '', draft_updated_at = NULL
+    WHERE id = ?
+  `).run(id);
+  res.json({ ok: true });
 });
 
 // ============================================================
