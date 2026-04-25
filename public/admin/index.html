@@ -755,7 +755,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.11.20</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.11.21</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1593,13 +1593,19 @@
       saveSetting('player_custom_color', '');
     }
 
+    // Update an input value WITHOUT clobbering what the user is currently typing.
+    // Skip the field if it has focus (user is in the middle of editing it).
     function setVal(id, v) {
       const el = document.getElementById(id);
-      if (el) el.value = v ?? '';
+      if (!el) return;
+      if (document.activeElement === el) return; // don't fight the user
+      el.value = v ?? '';
     }
     function setChk(id, v) {
       const el = document.getElementById(id);
-      if (el) el.checked = !!v;
+      if (!el) return;
+      if (document.activeElement === el) return;
+      el.checked = !!v;
     }
 
     function switchTab(name) {
