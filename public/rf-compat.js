@@ -731,16 +731,19 @@
       currentDecoration = theme;
       currentDecorationAnimated = animated;
 
-      // Create overlay layer if missing
+      // Create overlay layer if missing.
+      // Sits ABOVE the player panel (top: -32px lifts it) and extends down
+      // into the player. overflow:visible so animations can spill out.
       if (!decoLayer) {
         decoLayer = document.createElement('div');
         decoLayer.id = 'of-deco';
         decoLayer.style.cssText = `
-          position: absolute; top: -8px; left: 0; right: 0;
-          height: 16px; pointer-events: none; overflow: visible;
-          z-index: 1;
+          position: absolute; top: -36px; left: 0; right: 0;
+          height: 40px; pointer-events: none; overflow: visible;
+          z-index: 10000;
         `;
         panel.style.position = panel.style.position || 'fixed';
+        panel.style.overflow = 'visible';
         panel.appendChild(decoLayer);
       }
 
@@ -782,7 +785,7 @@
         { core: '#eff6ff', mid: '#3b82f6', edge: '#1e3a8a' }, // blue
         { core: '#faf5ff', mid: '#a855f7', edge: '#581c87' }, // purple
       ];
-      const count = 14;
+      const count = 16;
       let bulbs = '';
       for (let i = 0; i < count; i++) {
         const left = (i / (count - 1)) * 100;
@@ -790,8 +793,8 @@
         const delay = ((i * 0.23) % 2.0).toFixed(2);
         const id = 'ofg' + i;
         bulbs += `
-          <svg class="of-bulb${animClass}" viewBox="0 0 14 22" width="11" height="17"
-               style="left:${left}%;animation-delay:${delay}s;">
+          <svg class="of-bulb${animClass}" viewBox="0 0 14 22" width="20" height="32"
+               style="left:${left}%;animation-delay:${delay}s;--bulb-color:${c.mid};">
             <defs>
               <radialGradient id="${id}" cx="35%" cy="40%" r="60%">
                 <stop offset="0%" stop-color="${c.core}"/>
@@ -802,28 +805,27 @@
             <rect x="5" y="0" width="4" height="3" fill="#1f2937" rx="0.5"/>
             <rect x="4" y="2" width="6" height="2" fill="#374151"/>
             <ellipse cx="7" cy="13" rx="5" ry="7" fill="url(#${id})"/>
-            <ellipse cx="5" cy="10" rx="1.5" ry="2.5" fill="rgba(255,255,255,0.5)"/>
+            <ellipse cx="5" cy="10" rx="1.5" ry="2.5" fill="rgba(255,255,255,0.6)"/>
           </svg>`;
       }
       return `
         <style>
-          #of-deco { height: 22px; top: -10px; }
           #of-deco .of-wire {
-            position:absolute; top:2px; left:0; right:0; height:2px;
+            position:absolute; top:14px; left:0; right:0; height:2px;
             background: linear-gradient(180deg, #1f2937 0%, #0f172a 100%);
             border-radius: 1px;
             box-shadow: 0 1px 2px rgba(0,0,0,0.5);
           }
           #of-deco .of-bulb {
-            position:absolute; top:0; transform:translateX(-50%);
-            filter: drop-shadow(0 0 3px var(--bulb-glow, rgba(255,200,100,0.4)));
+            position:absolute; top:6px; transform:translateX(-50%);
+            filter: drop-shadow(0 0 6px var(--bulb-color));
           }
           #of-deco .of-bulb.of-deco-animate {
             animation: ofTwinkle 1.6s ease-in-out infinite;
           }
           @keyframes ofTwinkle {
             0%, 100% { filter: drop-shadow(0 0 1px rgba(0,0,0,0)) brightness(0.55); }
-            50%      { filter: drop-shadow(0 0 6px rgba(255,220,150,0.8)) brightness(1.25); }
+            50%      { filter: drop-shadow(0 0 12px var(--bulb-color)) brightness(1.4); }
           }
         </style>
         <div class="of-wire"></div>
@@ -834,20 +836,20 @@
     function halloweenSpooky(animClass) {
       // Real bat SVGs flapping wings + flying across; pumpkin SVGs in corners
       const batSvg = `
-        <svg viewBox="0 0 40 24" width="28" height="16">
-          <g fill="#1a1a1a">
+        <svg viewBox="0 0 40 24" width="44" height="26">
+          <g fill="#0a0a0a">
             <ellipse cx="20" cy="14" rx="3.5" ry="4"/>
             <path class="of-wing-l" d="M 17,12 Q 8,6 0,8 Q 4,11 6,16 Q 2,18 4,22 Q 10,18 14,18 Q 17,18 17,16 Z"
                   style="transform-origin:17px 13px"/>
             <path class="of-wing-r" d="M 23,12 Q 32,6 40,8 Q 36,11 34,16 Q 38,18 36,22 Q 30,18 26,18 Q 23,18 23,16 Z"
                   style="transform-origin:23px 13px"/>
             <path d="M 18,10 L 17,7 L 19,9 Z M 22,10 L 23,7 L 21,9 Z"/>
-            <circle cx="18.5" cy="13" r="0.4" fill="#dc2626"/>
-            <circle cx="21.5" cy="13" r="0.4" fill="#dc2626"/>
+            <circle cx="18.5" cy="13" r="0.6" fill="#dc2626"/>
+            <circle cx="21.5" cy="13" r="0.6" fill="#dc2626"/>
           </g>
         </svg>`;
       const pumpkinSvg = `
-        <svg viewBox="0 0 24 22" width="22" height="20">
+        <svg viewBox="0 0 24 22" width="36" height="33">
           <defs>
             <radialGradient id="ofPump" cx="40%" cy="40%" r="60%">
               <stop offset="0%" stop-color="#fb923c"/>
@@ -865,31 +867,34 @@
         </svg>`;
       return `
         <style>
-          #of-deco { height: 24px; top: -10px; }
           #of-deco .of-bat {
-            position:absolute; top:4px; left:-30px;
+            position:absolute; top:8px; left:-50px;
+            filter: drop-shadow(0 0 4px rgba(168,85,247,0.6));
           }
           #of-deco .of-bat.of-deco-animate { animation: ofBatFly 9s linear infinite; }
           #of-deco .of-bat.of-deco-animate .of-wing-l { animation: ofWingL 0.25s ease-in-out infinite; }
           #of-deco .of-bat.of-deco-animate .of-wing-r { animation: ofWingR 0.25s ease-in-out infinite; }
           @keyframes ofBatFly {
-            0%   { transform: translateX(0)    translateY(0) scale(0.6); opacity:0; }
-            5%   { opacity: 0.9; }
-            25%  { transform: translateX(28vw) translateY(-3px) scale(0.7); }
-            50%  { transform: translateX(55vw) translateY(2px)  scale(0.85); }
-            75%  { transform: translateX(80vw) translateY(-2px) scale(0.7); }
-            95%  { opacity: 0.9; }
-            100% { transform: translateX(110vw) translateY(0)   scale(0.6); opacity:0; }
+            0%   { transform: translateX(0)    translateY(0)  scale(0.8); opacity:0; }
+            5%   { opacity: 1; }
+            25%  { transform: translateX(28vw) translateY(-8px) scale(0.95); }
+            50%  { transform: translateX(55vw) translateY(4px)  scale(1.1); }
+            75%  { transform: translateX(80vw) translateY(-6px) scale(0.95); }
+            95%  { opacity: 1; }
+            100% { transform: translateX(110vw) translateY(0)   scale(0.8); opacity:0; }
           }
           @keyframes ofWingL { 0%,100% { transform: scaleX(1); } 50% { transform: scaleX(0.4); } }
           @keyframes ofWingR { 0%,100% { transform: scaleX(1); } 50% { transform: scaleX(0.4); } }
-          #of-deco .of-pumpkin { position:absolute; top:2px; }
-          #of-deco .of-pumpkin.left { left:6px; }
-          #of-deco .of-pumpkin.right { right:6px; }
+          #of-deco .of-pumpkin {
+            position:absolute; top:4px;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+          }
+          #of-deco .of-pumpkin.left { left:8px; }
+          #of-deco .of-pumpkin.right { right:8px; }
           #of-deco .of-pumpkin.of-deco-animate { animation: ofPumpBob 2.8s ease-in-out infinite; }
           @keyframes ofPumpBob {
-            0%, 100% { transform: translateY(0) rotate(-4deg); }
-            50%      { transform: translateY(-2px) rotate(4deg); }
+            0%, 100% { transform: translateY(0) rotate(-5deg); }
+            50%      { transform: translateY(-4px) rotate(5deg); }
           }
         </style>
         <span class="of-pumpkin left${animClass}">${pumpkinSvg}</span>
