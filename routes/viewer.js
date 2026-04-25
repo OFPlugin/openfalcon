@@ -32,6 +32,39 @@ function getClientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip;
 }
 
+// True if the client is on the same private LAN as FPP. Used to decide
+// whether we can hand them a 192.168.x.x daemon URL or whether they need
+// to go through our public proxy.
+//
+// Considered "same LAN" if:
+//   - FPP host is a private/local IP (RFC 1918 / loopback / link-local), AND
+//   - the client IP is also a private/local IP.
+// Public-internet visitors get the proxy fallback only.
+function isPrivateIp(ip) {
+  if (!ip) return false;
+  // Strip IPv6-mapped IPv4 prefix
+  const v = ip.replace(/^::ffff:/, '');
+  if (v === '127.0.0.1' || v === '::1' || v === 'localhost') return true;
+  if (v.startsWith('10.')) return true;
+  if (v.startsWith('192.168.')) return true;
+  if (v.startsWith('169.254.')) return true; // link-local
+  // 172.16.0.0 – 172.31.255.255
+  const m = v.match(/^172\.(\d+)\./);
+  if (m) {
+    const second = parseInt(m[1], 10);
+    if (second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+function requestIsOnSameLan(req, fppHost) {
+  if (!fppHost) return false;
+  // FPP hostnames like "fpp.local" we can't easily classify — be safe and
+  // assume not-LAN for non-IP hostnames (proxy works either way).
+  if (!/^[\d.:]+$/.test(fppHost)) return false;
+  if (!isPrivateIp(fppHost)) return false; // FPP isn't on a private network somehow
+  return isPrivateIp(getClientIp(req));
+}
+
 function distanceMiles(lat1, lng1, lat2, lng2) {
   const R = 3958.7613;
   const toRad = (v) => (v * Math.PI) / 180;
@@ -340,11 +373,17 @@ router.get('/now-playing-audio', (req, res) => {
   // Build audio daemon URLs if a plugin has registered an FPP host.
   // The daemon runs on FPP itself (default port 8090) and serves audio
   // directly + a WebSocket time-sync channel. Browser connects to it directly.
+  //
+  // BUT: only return these URLs when the request is from the SAME private
+  // network as FPP. Otherwise we'd send a public visitor a 192.168.x.x URL
+  // their browser can't reach — fetch hangs for 30+ seconds before failing
+  // over to the proxy. For public viewers, we omit the direct URL entirely
+  // so the client uses the OpenFalcon proxy (which IS publicly reachable).
   const fppHost = cfg.plugin_fpp_host;
   const audioPort = cfg.audio_daemon_port || 8090;
   let directStreamUrl = null;
   let wsSyncUrl = null;
-  if (fppHost) {
+  if (fppHost && requestIsOnSameLan(req, fppHost)) {
     directStreamUrl = `http://${fppHost}:${audioPort}/audio/${encodeURIComponent(seq.media_name)}`;
     wsSyncUrl = `ws://${fppHost}:${audioPort}/sync`;
   }
@@ -362,11 +401,16 @@ router.get('/now-playing-audio', (req, res) => {
     // Timestamp-anchored sync — Web Audio API uses these for sample-precise scheduling
     trackStartedAtMs: startedAtMs,
     serverNowMs: Date.now(),
-    // Direct daemon URLs (Phase 2 — preferred). If null, viewer falls back to proxy.
+    // Direct daemon URLs (Phase 2 — preferred for local listeners). Null if no daemon.
     directStreamUrl,
     wsSyncUrl,
-    // Proxy fallback (Phase 1) — works even without daemon
+    // Proxy stream URL — relative path always works for same-origin requests
     streamUrl: `/api/audio-stream/${encodeURIComponent(seq.name)}`,
+    // Public stream URL — absolute, via public domain. Used by client when local
+    // probes fail (e.g. cellular listeners). Empty string if not configured.
+    publicStreamUrl: cfg.public_base_url
+      ? `${String(cfg.public_base_url).replace(/\/+$/, '')}/api/audio-stream/${encodeURIComponent(seq.name)}`
+      : '',
     // Visual settings (snow, decoration, custom color) — always present
     ...visualConfig,
   });
@@ -407,9 +451,9 @@ router.get('/audio-stream/:sequence', async (req, res) => {
       return res.status(upstream.status).send('FPP returned ' + upstream.status);
     }
 
-    // Mirror the relevant headers from FPP
+    // Mirror the relevant headers from FPP (excluding cache-control — we set our own)
     res.status(upstream.status);
-    ['content-length', 'content-range', 'accept-ranges', 'cache-control'].forEach(h => {
+    ['content-length', 'content-range', 'accept-ranges'].forEach(h => {
       const v = upstream.headers.get(h);
       if (v) res.setHeader(h, v);
     });
@@ -423,6 +467,11 @@ router.get('/audio-stream/:sequence', async (req, res) => {
     }
     // Always advertise Accept-Ranges so browsers know they can seek
     if (!upstream.headers.get('accept-ranges')) res.setHeader('Accept-Ranges', 'bytes');
+    // Aggressive caching so Cloudflare can edge-serve subsequent requests for
+    // external listeners. Audio files don't change after they're recorded.
+    // 1 hour at edge + revalidation buys huge bandwidth + latency wins for
+    // cellular listeners while keeping a path to invalidate if needed.
+    res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
 
     // Stream the body through — Node 18+ supports response.body as ReadableStream
     if (upstream.body) {

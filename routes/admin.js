@@ -114,6 +114,8 @@ router.put('/config', requireAdmin, (req, res) => {
     'player_decoration_animated',
     'page_snow_enabled',
     'player_custom_color',
+    // External access
+    'public_base_url',
   ];
   const updates = {};
   for (const k of allowed) {

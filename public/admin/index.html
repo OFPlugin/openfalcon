@@ -755,7 +755,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.11.19</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.11.20</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1290,6 +1290,27 @@
             <textarea id="cfg_blocked_ips" rows="3" placeholder="e.g. 1.2.3.4, 10.0.0.0/24" onchange="saveSetting('blocked_ips', this.value)"></textarea>
           </div>
         </div>
+
+        <div class="card">
+          <h2>External Audio Access</h2>
+          <p class="muted" style="font-size: 0.9rem; margin: 0.5rem 0 1rem;">
+            Listeners on cellular or away from your home network can't reach your local IP.
+            Set your public domain so the player automatically falls back to it for external listeners.
+            Local listeners still use the direct path for best performance.
+          </p>
+          <div>
+            <label for="cfg_public_base_url">Public base URL (your domain)</label>
+            <input type="text" id="cfg_public_base_url"
+                   placeholder="https://lightsondrake.org"
+                   onchange="saveSetting('public_base_url', this.value.trim())"
+                   style="width: 100%; max-width: 400px;" />
+            <p class="muted" style="font-size: 0.8rem; margin: 0.4rem 0 0;">
+              Should resolve to this server through your reverse proxy. The audio stream endpoint
+              must be reachable at <code>&lt;domain&gt;/api/audio-stream/...</code>.
+              Leave blank to disable external access.
+            </p>
+          </div>
+        </div>
       </div>
 
       <!-- ============================================================
@@ -1455,6 +1476,7 @@
       setVal('cfg_check_radius_miles', c.check_radius_miles);
       setVal('cfg_hide_sequence_after_played', c.hide_sequence_after_played);
       setVal('cfg_blocked_ips', c.blocked_ips || '');
+      setVal('cfg_public_base_url', c.public_base_url || '');
       setVal('cfg_player_decoration', c.player_decoration || 'none');
       setChk('cfg_player_decoration_animated', c.player_decoration_animated);
       setChk('cfg_page_snow_enabled', c.page_snow_enabled);
