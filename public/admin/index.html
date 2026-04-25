@@ -578,6 +578,28 @@
     .toggle input:checked + .slider { background: var(--status-success); }
     .toggle input:checked + .slider::before { transform: translateX(16px); }
 
+    /* Cover search modal */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100;
+                       display: flex; align-items: center; justify-content: center; padding: 1rem; }
+    .modal-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px;
+                   max-width: 720px; width: 100%; max-height: 90vh; overflow-y: auto;
+                   box-shadow: var(--shadow-elevated); }
+    .modal-header { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border);
+                     display: flex; align-items: center; justify-content: space-between; }
+    .modal-body { padding: 1.25rem; }
+    .modal-close { background: transparent; color: var(--text-muted); font-size: 1.4rem;
+                    border: none; cursor: pointer; padding: 0; line-height: 1; }
+    .modal-close:hover { color: var(--text); background: transparent; }
+    .cover-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
+    .cover-pick { background: var(--bg-input); border: 2px solid var(--border); border-radius: 6px;
+                   padding: 0.5rem; cursor: pointer; transition: border-color 0.15s; }
+    .cover-pick:hover { border-color: var(--accent); }
+    .cover-pick img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; display: block; background: var(--bg); }
+    .cover-pick .src { font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem; text-align: center;
+                       text-transform: uppercase; letter-spacing: 0.05em; }
+    .cover-pick .meta { font-size: 0.78rem; color: var(--text); margin-top: 0.25rem;
+                         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
     /* Code/token display */
     code {
       font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
@@ -610,7 +632,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.7.5</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.8.0</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -731,6 +753,7 @@
           <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 1rem;">
             <h2 style="margin: 0;">Sequences <span id="sequenceCount" class="muted" style="font-weight: normal;"></span></h2>
             <div class="row" style="gap: 0.5rem; margin: 0;">
+              <button class="secondary" onclick="fetchAllCovers()">Fetch Covers</button>
               <button class="secondary" onclick="sortSequencesAlphabetically()">Sort A→Z</button>
               <button class="secondary" onclick="deleteInactiveSequences()">Delete Inactive</button>
             </div>
@@ -1260,10 +1283,134 @@
     }
 
     async function promptImageUrl(id, current) {
-      const url = prompt('Artwork image URL (leave blank to remove):', current || '');
-      if (url === null) return;
-      await updateSeqField(id, 'image_url', url);
-      loadSequences();
+      // Find the sequence in our cache to seed the search
+      const seq = (sequencesCache || []).find(s => s.id === id);
+      if (!seq) return;
+      openCoverModal(seq);
+    }
+
+    // ======= Cover Art Modal =======
+    function openCoverModal(seq) {
+      // Remove any existing modal
+      const existing = document.getElementById('coverModal');
+      if (existing) existing.remove();
+
+      const backdrop = document.createElement('div');
+      backdrop.className = 'modal-backdrop';
+      backdrop.id = 'coverModal';
+      backdrop.onclick = (e) => { if (e.target === backdrop) closeCoverModal(); };
+
+      backdrop.innerHTML = `
+        <div class="modal-card">
+          <div class="modal-header">
+            <h2 style="margin: 0; font-size: 1.05rem;">Cover art for "${escapeHtml(seq.display_name)}"</h2>
+            <button class="modal-close" onclick="closeCoverModal()">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="row" style="gap: 0.5rem;">
+              <input type="text" id="coverSearchTitle" placeholder="Title" value="${escapeAttr(seq.display_name || '')}" style="flex: 2;" />
+              <input type="text" id="coverSearchArtist" placeholder="Artist" value="${escapeAttr(seq.artist || '')}" style="flex: 2;" />
+              <button onclick="runCoverSearch(${seq.id})">Search</button>
+            </div>
+            <div class="row" style="gap: 0.5rem; margin-top: 0.5rem; align-items: center;">
+              <label for="coverManualUrl" style="margin: 0; flex-shrink: 0;">Or paste URL:</label>
+              <input type="text" id="coverManualUrl" placeholder="https://..." style="flex: 1;" />
+              <button class="secondary" onclick="setCoverFromUrl(${seq.id})">Use URL</button>
+              <button class="danger" onclick="clearCover(${seq.id})">Remove</button>
+            </div>
+            <div id="coverResults" class="cover-grid"></div>
+            <div id="coverStatus" class="muted" style="margin-top: 0.75rem;"></div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(backdrop);
+
+      // Auto-search on open
+      setTimeout(() => runCoverSearch(seq.id), 100);
+    }
+
+    function closeCoverModal() {
+      const m = document.getElementById('coverModal');
+      if (m) m.remove();
+    }
+
+    async function runCoverSearch(seqId) {
+      const title = document.getElementById('coverSearchTitle').value.trim();
+      const artist = document.getElementById('coverSearchArtist').value.trim();
+      const status = document.getElementById('coverStatus');
+      const results = document.getElementById('coverResults');
+      if (!title) { status.textContent = 'Title required'; return; }
+      status.textContent = 'Searching iTunes + MusicBrainz...';
+      results.innerHTML = '';
+
+      const r = await api(`/cover-search?artist=${encodeURIComponent(artist)}&title=${encodeURIComponent(title)}`);
+      if (!r.ok) { status.textContent = 'Search failed: ' + (r.data?.error || 'unknown'); return; }
+      const candidates = r.data.candidates || [];
+      if (candidates.length === 0) {
+        status.textContent = 'No covers found. Try a different search or paste a URL directly.';
+        return;
+      }
+      status.textContent = `Found ${candidates.length} candidates. Click one to use it.`;
+      results.innerHTML = candidates.map((c, i) => `
+        <div class="cover-pick" onclick="pickCover(${seqId}, ${i})">
+          <img src="${escapeAttr(c.thumbUrl)}" alt="" loading="lazy" />
+          <div class="src">${escapeHtml(c.source)}</div>
+          <div class="meta" title="${escapeAttr((c.album || '') + ' — ' + (c.artist || ''))}">${escapeHtml(c.album || c.title || '')}</div>
+        </div>
+      `).join('');
+      window.__coverCandidates = candidates;
+    }
+
+    async function pickCover(seqId, index) {
+      const c = (window.__coverCandidates || [])[index];
+      if (!c) return;
+      const status = document.getElementById('coverStatus');
+      status.textContent = 'Downloading cover...';
+      const r = await api(`/sequences/${seqId}/cover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: c.url }),
+      });
+      if (r.ok) {
+        status.textContent = '✓ Cover updated';
+        setTimeout(() => { closeCoverModal(); loadSequences(); }, 700);
+      } else {
+        status.textContent = 'Failed: ' + (r.data?.error || 'unknown');
+      }
+    }
+
+    async function setCoverFromUrl(seqId) {
+      const url = document.getElementById('coverManualUrl').value.trim();
+      if (!url) return;
+      const status = document.getElementById('coverStatus');
+      status.textContent = 'Downloading cover...';
+      const r = await api(`/sequences/${seqId}/cover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      if (r.ok) {
+        status.textContent = '✓ Cover updated';
+        setTimeout(() => { closeCoverModal(); loadSequences(); }, 700);
+      } else {
+        status.textContent = 'Failed: ' + (r.data?.error || 'unknown');
+      }
+    }
+
+    async function clearCover(seqId) {
+      if (!confirm('Remove cover for this sequence?')) return;
+      const r = await api(`/sequences/${seqId}/cover`, { method: 'DELETE' });
+      if (r.ok) { closeCoverModal(); loadSequences(); }
+    }
+
+    async function fetchAllCovers() {
+      if (!confirm('Auto-fetch covers for all sequences missing one?\nThis can take ~1 second per sequence.')) return;
+      const r = await api('/sequences/fetch-all-covers', { method: 'POST' });
+      if (r.ok) {
+        alert(`Fetching ${r.data.queued} covers in the background. They\\'ll appear in the table over the next few minutes — refresh sequences to see updates.`);
+      } else {
+        alert('Failed to start cover fetch');
+      }
     }
 
     // ======= Drag-and-drop reorder =======

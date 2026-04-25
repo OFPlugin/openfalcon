@@ -410,4 +410,100 @@ router.post('/templates/:id/duplicate', requireAdmin, (req, res) => {
   res.json({ ok: true, id: result.lastInsertRowid });
 });
 
+// ============================================================
+// Cover art endpoints
+// ============================================================
+
+// Auto-fetch cover for a single sequence (MusicBrainz primary, iTunes fallback)
+router.post('/sequences/:id/fetch-cover', requireAdmin, async (req, res) => {
+  const seq = db.prepare(`SELECT id, name, display_name, artist FROM sequences WHERE id = ?`).get(Number(req.params.id));
+  if (!seq) return res.status(404).json({ error: 'Sequence not found' });
+  try {
+    const { autoFetchCover } = require('../lib/cover-art');
+    const localPath = await autoFetchCover(seq);
+    if (!localPath) return res.json({ ok: false, message: 'No cover found' });
+    db.prepare(`UPDATE sequences SET image_url = ? WHERE id = ?`).run(localPath, seq.id);
+    res.json({ ok: true, image_url: localPath });
+  } catch (err) {
+    console.error('fetch-cover error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Auto-fetch covers for ALL sequences missing one (background job)
+router.post('/sequences/fetch-all-covers', requireAdmin, async (req, res) => {
+  const missing = db.prepare(`
+    SELECT id, name, display_name, artist FROM sequences
+    WHERE (image_url IS NULL OR image_url = '') AND visible = 1
+  `).all();
+  // Respond immediately and run async — don't block the request
+  res.json({ ok: true, queued: missing.length });
+
+  const { autoFetchCover } = require('../lib/cover-art');
+  const update = db.prepare(`UPDATE sequences SET image_url = ? WHERE id = ?`);
+
+  for (const seq of missing) {
+    try {
+      const localPath = await autoFetchCover(seq);
+      if (localPath) {
+        update.run(localPath, seq.id);
+        console.log(`Fetched cover for: ${seq.display_name || seq.name}`);
+      } else {
+        console.log(`No cover found for: ${seq.display_name || seq.name}`);
+      }
+    } catch (e) {
+      console.warn(`Cover fetch failed for ${seq.name}:`, e.message);
+    }
+    // Be nice to MusicBrainz — they rate-limit at 1 req/s
+    await new Promise(r => setTimeout(r, 1100));
+  }
+  console.log(`Bulk cover fetch complete (processed ${missing.length}).`);
+});
+
+// Manual search — returns candidate covers from both sources
+router.get('/cover-search', requireAdmin, async (req, res) => {
+  const artist = String(req.query.artist || '').trim();
+  const title = String(req.query.title || '').trim();
+  if (!title) return res.status(400).json({ error: 'title required' });
+  try {
+    const { searchCovers } = require('../lib/cover-art');
+    const candidates = await searchCovers(artist, title);
+    res.json({ candidates });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Set a sequence's cover from a specific URL (used by manual search modal)
+router.post('/sequences/:id/cover', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const seq = db.prepare(`SELECT id FROM sequences WHERE id = ?`).get(id);
+  if (!seq) return res.status(404).json({ error: 'Sequence not found' });
+  const { url } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'url required' });
+  try {
+    const { downloadCover } = require('../lib/cover-art');
+    const localPath = await downloadCover(url, id);
+    db.prepare(`UPDATE sequences SET image_url = ? WHERE id = ?`).run(localPath, id);
+    res.json({ ok: true, image_url: localPath });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear a cover (delete file + null the URL)
+router.delete('/sequences/:id/cover', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const seq = db.prepare(`SELECT id, image_url FROM sequences WHERE id = ?`).get(id);
+  if (!seq) return res.status(404).json({ error: 'Sequence not found' });
+  if (seq.image_url && seq.image_url.startsWith('/covers/')) {
+    const fs = require('fs');
+    const path = require('path');
+    const filePath = path.join(__dirname, '..', 'data', 'covers', `${id}.jpg`);
+    try { fs.unlinkSync(filePath); } catch (e) { /* file may not exist */ }
+  }
+  db.prepare(`UPDATE sequences SET image_url = NULL WHERE id = ?`).run(id);
+  res.json({ ok: true });
+});
+
 module.exports = router;

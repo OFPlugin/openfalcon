@@ -111,6 +111,11 @@ app.get('/', (req, res) => {
 // Static assets (CSS, JS, any future viewer assets)
 app.use('/', express.static(path.join(__dirname, 'public')));
 
+// Serve cached cover art images
+app.use('/covers', express.static(path.join(__dirname, 'data', 'covers'), {
+  maxAge: '7d', // browser caches for 7 days; we replace on update
+}));
+
 // Admin static files (under /admin)
 app.use('/admin', express.static(path.join(__dirname, 'public/admin')));
 

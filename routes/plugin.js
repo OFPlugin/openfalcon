@@ -297,6 +297,39 @@ router.post('/sync-sequences', (req, res) => {
   if (io) io.emit('sequencesSynced', { count: inserted, playlistName });
 
   res.json({ ok: true, synced: inserted });
+
+  // After responding, kick off auto-cover-fetch for any sequences without art.
+  // Runs detached — sync response is already sent. Rate-limited internally.
+  setImmediate(async () => {
+    try {
+      const missing = db.prepare(`
+        SELECT id, name, display_name, artist FROM sequences
+        WHERE (image_url IS NULL OR image_url = '') AND visible = 1
+      `).all();
+      if (missing.length === 0) return;
+
+      const { autoFetchCover } = require('../lib/cover-art');
+      const update = db.prepare(`UPDATE sequences SET image_url = ? WHERE id = ?`);
+      console.log(`[cover-art] Auto-fetching covers for ${missing.length} sequences`);
+
+      for (const seq of missing) {
+        try {
+          const localPath = await autoFetchCover(seq);
+          if (localPath) {
+            update.run(localPath, seq.id);
+            console.log(`[cover-art] Got cover for ${seq.display_name || seq.name}`);
+          }
+        } catch (e) {
+          console.warn(`[cover-art] Failed for ${seq.name}:`, e.message);
+        }
+        // Rate limit — MusicBrainz is 1 req/s per UA
+        await new Promise(r => setTimeout(r, 1100));
+      }
+      console.log(`[cover-art] Auto-fetch complete`);
+    } catch (e) {
+      console.error('[cover-art] Auto-fetch crashed:', e.message);
+    }
+  });
 });
 
 // ============================================================
