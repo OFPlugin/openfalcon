@@ -1012,7 +1012,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.13.7</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.14.0</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1696,6 +1696,22 @@
                      style="max-width: 120px;" />
               <span class="muted" style="font-size: 0.8rem;">— typically smaller than the interaction radius</span>
             </div>
+
+            <h3 style="margin-top: 1.25rem;">View-source deterrent <span class="muted" style="font-size: 0.8rem; font-weight: normal;">(template protection)</span></h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
+              Replaces the visible page source with a friendly "nothing to see here" message.
+              The real page still renders normally for visitors — only Ctrl+U / View Source / right-click see the joke version.
+              Also disables the Ctrl+U keyboard shortcut and right-click menu on the viewer page.
+              Useful if you've purchased a viewer template from a creator and don't want casual visitors copying it.
+              <br /><br />
+              <strong>Important:</strong> this is a deterrent, not real protection. Anyone with developer tools can still
+              read the live DOM and recover the page from network requests. Don't rely on this to enforce a license —
+              use it to discourage casual snooping.
+            </p>
+            <div class="row">
+              <input type="checkbox" id="cfg_viewer_source_obfuscate" onchange="saveSetting('viewer_source_obfuscate', this.checked ? 1 : 0)" />
+              <label for="cfg_viewer_source_obfuscate" style="margin: 0;">Hide viewer template HTML from view-source</label>
+            </div>
           </div>
         </div>
 
@@ -2045,6 +2061,7 @@
       setVal('cfg_check_radius_miles', c.check_radius_miles);
       setChk('cfg_audio_gate_enabled', c.audio_gate_enabled);
       setVal('cfg_audio_gate_radius_miles', c.audio_gate_radius_miles || 0.5);
+      setChk('cfg_viewer_source_obfuscate', c.viewer_source_obfuscate);
       updateAudioGateVisibility();
       setVal('cfg_hide_sequence_after_played', c.hide_sequence_after_played);
       setVal('cfg_blocked_ips', c.blocked_ips || '');

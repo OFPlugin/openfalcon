@@ -114,12 +114,109 @@ app.get('/', (req, res) => {
     });
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(html);
+
+    // Source-obfuscation deterrent. Wraps the rendered HTML in a stub that:
+    //   (1) Looks like nothing-to-see-here in view-source
+    //   (2) Decodes and replaces the document body via JS at runtime
+    //   (3) Disables Ctrl+U / Ctrl+Shift+I shortcuts and the right-click menu
+    //
+    // This is a DETERRENT, not real protection. Anyone with DevTools open
+    // can see the live DOM, and the encoded payload is recoverable from
+    // the network tab. The goal is just to discourage casual snooping —
+    // someone hitting Ctrl+U expecting easy template theft sees a joke
+    // page instead of the real source.
+    //
+    // Disabled by default. Admin toggles in Settings → Interaction Safeguards
+    // (or whichever section). Skipped automatically for the preview iframe so
+    // the visual designer keeps working.
+    if (cfg.viewer_source_obfuscate === 1 && !req.query.preview) {
+      const encoded = Buffer.from(html, 'utf8').toString('base64');
+      res.send(buildObfuscationStub(encoded));
+    } else {
+      res.send(html);
+    }
   } catch (err) {
     console.error('Error rendering viewer page:', err);
     res.status(500).send('<h1>Error rendering viewer page</h1><pre>' + String(err.message) + '</pre>');
   }
 });
+
+// Stub HTML used when viewer_source_obfuscate is enabled. The encoded
+// argument is the Base64-encoded rendered HTML; runtime JS decodes and
+// replaces the document.
+function buildObfuscationStub(encoded) {
+  // Funny visible content keeps casual sourcerers entertained instead of
+  // angry. A small comment block at the top is what they see first.
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+   ┌──────────────────────────────────────────────────────────────────┐
+   │                                                                  │
+   │   👋  Hey there, friend. Looking for the source code?            │
+   │                                                                  │
+   │   This light show's viewer page was built with love (and         │
+   │   in some cases, paid for from a creator). Copying it without    │
+   │   asking would be uncool. If you like the look, reach out to     │
+   │   the show owner and ask — most folks are happy to share or      │
+   │   point you to the original creator.                             │
+   │                                                                  │
+   │   The actual page renders just fine in your browser. This        │
+   │   message is just here when you peek at the source. ✌️          │
+   │                                                                  │
+   └──────────────────────────────────────────────────────────────────┘
+-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Light Show</title>
+<style>
+  html,body{margin:0;padding:0;background:#0a0e27;color:#fff;font-family:system-ui,sans-serif;}
+  .of-stub-loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1rem;}
+  .of-stub-loading .pulse{width:48px;height:48px;border-radius:50%;background:#dc2626;animation:ofStubPulse 1.2s ease-in-out infinite;}
+  @keyframes ofStubPulse{0%,100%{transform:scale(0.85);opacity:0.6;}50%{transform:scale(1.1);opacity:1;}}
+</style>
+</head>
+<body>
+<div class="of-stub-loading"><div class="pulse"></div><div>Loading show…</div></div>
+<script>
+(function(){
+  // The real page lives in this string — Base64-encoded so it doesn't
+  // appear as readable HTML in view-source.
+  var p='${encoded}';
+  try {
+    var html = '';
+    // atob is built into every modern browser; decode the payload.
+    var bin = atob(p);
+    // Convert binary string to UTF-8 properly (atob returns Latin-1 by default)
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    html = new TextDecoder('utf-8').decode(bytes);
+
+    // Replace the document with the real content. document.open/write/close
+    // is the most reliable way to swap an entire page including <head>.
+    document.open();
+    document.write(html);
+    document.close();
+  } catch (e) {
+    // If anything goes wrong (browser too old, blocked, whatever), show a
+    // plain message rather than a blank page.
+    document.body.innerHTML = '<div style="padding:2rem;text-align:center;font-family:system-ui;"><h2>Show is loading…</h2><p>If this page does not load in a few seconds, please refresh.</p></div>';
+  }
+
+  // Casual deterrents — disable Ctrl+U / Ctrl+Shift+I / right-click. Real
+  // determined users open DevTools via menu instead, but most casual people
+  // give up at this layer.
+  document.addEventListener('keydown', function(e){
+    if (e.ctrlKey && (e.key === 'u' || e.key === 'U')) { e.preventDefault(); return false; }
+    if (e.ctrlKey && e.shiftKey && (e.key === 'i' || e.key === 'I' || e.key === 'j' || e.key === 'J')) { e.preventDefault(); return false; }
+    if (e.key === 'F12') { e.preventDefault(); return false; }
+  }, true);
+  document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; }, true);
+})();
+</script>
+</body>
+</html>`;
+}
 
 // Static assets (CSS, JS, any future viewer assets)
 app.use('/', express.static(path.join(__dirname, 'public')));

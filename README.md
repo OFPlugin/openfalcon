@@ -27,19 +27,18 @@ You get an admin dashboard with stats, queue management, sequence configuration,
 
 - **Three editing modes** — pick what fits your comfort level:
   - **Settings mode**: form-based editor for show name, colors, fonts, hours, social links, FM frequency. No HTML knowledge required
-  - **Blocks mode**: drag-and-drop sections (Hero, Now Playing, Queue, Vote/Jukebox instructions, Song List, Location Code, Social Links, Custom HTML) onto a canvas. Reorder by dragging or with arrow buttons
+  - **Blocks mode**: drag-and-drop sections onto a canvas — 12 block types covering Hero, Text, Divider, Show Hours, Now Playing, Queue, Voting Instructions, Jukebox Instructions, Song List, Location Code, Social Links, and Custom HTML. Reorder by dragging or with arrow buttons
   - **Code mode**: full Monaco editor for hand-written HTML. Standard Remote Falcon placeholders supported
 - **Live preview iframe** — see your changes update next to the editor as you type, before committing
 - **Drafts** — edits save as drafts automatically (debounced 500ms). Visitors keep seeing the live page until you click Save Changes
-- **Multiple templates** — keep separate templates for Christmas vs Halloween, switch with one click
-- **Built-in starter templates** — Christmas/Halloween mobile-first templates included
+- **Multiple templates** — create as many templates as you want and switch active ones with one click. Build separate looks for different seasons or events
+- **Default template included** — fresh installs get a working mobile-friendly template seeded automatically; customize from there
 
 ### Audio & copyright safeguards
 
 - **GPS audio gate (optional)** — restrict audio playback to listeners physically present at your show. Tapping the 🎧 button forces a fresh GPS check (cached location won't bypass it). Re-verifies every 15 minutes during playback to catch listeners who walked away
 - **Refresh-to-recover latch** — once the gate trips, audio stays blocked until the page is refreshed. Prevents auto-resume when admin toggles control modes
 - **External audio access** — set your public domain so listeners on cellular can stream the audio without VPN. Local listeners still use the direct path for best performance
-- **Watermarking ready** — direct stream URL exposed for use with external watermarking tools if your jurisdiction requires it
 
 ### Location tools
 
@@ -49,26 +48,24 @@ You get an admin dashboard with stats, queue management, sequence configuration,
 
 ### FPP integration
 
-- **Plugin auto-discovery** — install the OpenFalcon plugin from the FPP plugin manager. Plugin handshakes with the server, syncs sequences, reports playing status
-- **Sequence playlist sync** — playlists pulled from FPP, displayed and reorderable in admin
-- **Sequence control** — start/stop/skip from admin. Test triggers. Stats per sequence
+- **Companion FPP plugin** — install the OpenFalcon plugin from FPP's Plugin Manager, point it at your OpenFalcon server URL, and it stays connected. Plugin handles sequence sync, playing-status reporting, and viewer request handoff to FPP's playlist
+- **Sequence sync** — sequences imported from FPP into the admin, where you can reorder, rename for display, set artists, hide individual sequences, and toggle votable/jukeboxable per sequence
 - **Mid-track resume** — when a viewer-requested song interrupts the original, resuming the original picks up at the correct elapsed position (not the start)
 - **PSA injection** — auto-inject PSAs (sponsor messages, holiday greetings) every N interactions
+- **Real-time plugin status** — admin header shows whether FPP plugin is connected and last sync time, updated live via Socket.io
 
 ### Admin & operations
 
 - **Multi-user authentication** — username + password, bcrypt hashed, JWT session cookies. Per-user "remember me" (30-day cookie or session-only). Force-password-change flag for new accounts
 - **User management** — add/edit/disable/delete users. Self-protection: can't disable yourself, can't delete the last user
-- **Themes** — Stage·Dark, Stage·Light, plus seasonal themes (Easter, St. Patrick's, Independence Day, Valentine's, Hanukkah, Thanksgiving) for the admin UI
+- **Themes** — Stage·Dark and Stage·Light core themes for the admin UI, plus seasonal variants (Christmas, Halloween, Easter, St. Patrick's, Independence Day, Valentine's) you can switch between
 - **Sequence snapshots** — save your current playlist configuration (display names, artists, sort order, visibility) as a named snapshot. Restore later when switching seasons. Non-destructive: preserves play history, vote stats, queue state
 - **Live stats dashboard** — votes per round, jukebox queue depth, plays per sequence, last-played times, viewer count
 - **IP blocking** — block individual IPs or CIDR ranges. Useful when one user gets too enthusiastic with the request button
 - **Per-sequence visibility/votability/jukeboxability** — fine-grained control over what shows up where
 - **Auto-fill song info** — looks up sequence titles online to populate display name + artist automatically (no more "JinglePopXmas2019_v3.fseq" shown to viewers)
 - **GPS proximity check** — separate from the audio gate; restricts who can vote/queue based on their physical location
-- **PSA frequency control** — drop in promotional or sponsor announcements every N interactions
 - **Configurable request limits** — per-viewer cap on jukebox requests per session (1-20)
-- **Real-time plugin status** — admin header shows whether FPP plugin is connected and last sync time
 
 ### Self-hosted, owned, free
 
