@@ -85,6 +85,95 @@
     }
 
     /* ============================================================
+     * HOLIDAY THEMES — share the same structure, different palettes.
+     * Each maps to a season; users switch via the theme dropdown.
+     * ============================================================ */
+
+    /* Christmas — deep evergreen + red */
+    .theme-christmas {
+      --bg: #0a2818; --bg-elevated: #14382a; --bg-tertiary: #1a4233; --bg-input: #0d2e1f;
+      --border: #1e4f3a; --border-hover: #2c6e51;
+      --text: #f0f7e8; --text-muted: #9bb49b; --text-dim: #5a7563;
+      --accent: #dc2626; --accent-hover: #b91c1c; --accent-text: #ffffff; --accent-soft: rgba(220,38,38,0.15);
+      --rgb-red: #ef4444; --rgb-green: #22c55e; --rgb-blue: #3b82f6; --rgb-amber: #f59e0b; --rgb-purple: #a855f7;
+      --status-success: #22c55e; --status-success-soft: rgba(34,197,94,0.15);
+      --status-warning: #f59e0b; --status-warning-soft: rgba(245,158,11,0.15);
+      --status-danger: #ef4444;  --status-danger-soft: rgba(239,68,68,0.15);
+      --status-neutral: #6b7280; --status-neutral-soft: rgba(107,114,128,0.2);
+      --shadow-card: 0 1px 3px rgba(0,0,0,0.3); --shadow-elevated: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    /* Halloween — deep purple + orange glow */
+    .theme-halloween {
+      --bg: #1a0a28; --bg-elevated: #2a1438; --bg-tertiary: #341a44; --bg-input: #1f0d2e;
+      --border: #4a1e5a; --border-hover: #6b2c80;
+      --text: #f7e8f0; --text-muted: #b49bb0; --text-dim: #75637c;
+      --accent: #f97316; --accent-hover: #ea580c; --accent-text: #ffffff; --accent-soft: rgba(249,115,22,0.18);
+      --rgb-red: #ef4444; --rgb-green: #84cc16; --rgb-blue: #06b6d4; --rgb-amber: #f97316; --rgb-purple: #a855f7;
+      --status-success: #84cc16; --status-success-soft: rgba(132,204,22,0.15);
+      --status-warning: #f97316; --status-warning-soft: rgba(249,115,22,0.18);
+      --status-danger: #ef4444;  --status-danger-soft: rgba(239,68,68,0.15);
+      --status-neutral: #71717a; --status-neutral-soft: rgba(113,113,122,0.2);
+      --shadow-card: 0 1px 3px rgba(0,0,0,0.4); --shadow-elevated: 0 4px 12px rgba(0,0,0,0.5);
+    }
+
+    /* Easter — soft pastels on cream */
+    .theme-easter {
+      --bg: #fef9f3; --bg-elevated: #ffffff; --bg-tertiary: #faf0e8; --bg-input: #ffffff;
+      --border: #f0d8e0; --border-hover: #d8a8c0;
+      --text: #4a3a52; --text-muted: #8a6a82; --text-dim: #b8a0b0;
+      --accent: #ec4899; --accent-hover: #db2777; --accent-text: #ffffff; --accent-soft: rgba(236,72,153,0.12);
+      --rgb-red: #ec4899; --rgb-green: #84cc16; --rgb-blue: #38bdf8; --rgb-amber: #fbbf24; --rgb-purple: #c084fc;
+      --status-success: #65a30d; --status-success-soft: rgba(101,163,13,0.12);
+      --status-warning: #d97706; --status-warning-soft: rgba(217,119,6,0.12);
+      --status-danger: #e11d48;  --status-danger-soft: rgba(225,29,72,0.1);
+      --status-neutral: #78716c; --status-neutral-soft: rgba(120,113,108,0.12);
+      --shadow-card: 0 1px 2px rgba(0,0,0,0.04); --shadow-elevated: 0 4px 12px rgba(0,0,0,0.08);
+    }
+
+    /* St. Patrick's Day — green on cream */
+    .theme-stpatricks {
+      --bg: #042818; --bg-elevated: #0d3d28; --bg-tertiary: #144d32; --bg-input: #082e1d;
+      --border: #1d6648; --border-hover: #2d8a64;
+      --text: #f0f7e8; --text-muted: #b4c79b; --text-dim: #6a7d5a;
+      --accent: #f0c419; --accent-hover: #d4a90a; --accent-text: #1a2c0f; --accent-soft: rgba(240,196,25,0.15);
+      --rgb-red: #ef4444; --rgb-green: #22c55e; --rgb-blue: #3b82f6; --rgb-amber: #f0c419; --rgb-purple: #a855f7;
+      --status-success: #22c55e; --status-success-soft: rgba(34,197,94,0.15);
+      --status-warning: #f0c419; --status-warning-soft: rgba(240,196,25,0.18);
+      --status-danger: #ef4444;  --status-danger-soft: rgba(239,68,68,0.15);
+      --status-neutral: #71717a; --status-neutral-soft: rgba(113,113,122,0.2);
+      --shadow-card: 0 1px 3px rgba(0,0,0,0.3); --shadow-elevated: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    /* Independence Day — red, white, navy blue */
+    .theme-independence {
+      --bg: #0a1438; --bg-elevated: #14234f; --bg-tertiary: #1a2c66; --bg-input: #0d1b3e;
+      --border: #2c3a78; --border-hover: #3d52a8;
+      --text: #f7faff; --text-muted: #a0b0d0; --text-dim: #6a78a0;
+      --accent: #dc2626; --accent-hover: #b91c1c; --accent-text: #ffffff; --accent-soft: rgba(220,38,38,0.15);
+      --rgb-red: #dc2626; --rgb-green: #22c55e; --rgb-blue: #3b82f6; --rgb-amber: #f59e0b; --rgb-purple: #a855f7;
+      --status-success: #22c55e; --status-success-soft: rgba(34,197,94,0.15);
+      --status-warning: #f59e0b; --status-warning-soft: rgba(245,158,11,0.15);
+      --status-danger: #ef4444;  --status-danger-soft: rgba(239,68,68,0.15);
+      --status-neutral: #6b7280; --status-neutral-soft: rgba(107,114,128,0.2);
+      --shadow-card: 0 1px 3px rgba(0,0,0,0.3); --shadow-elevated: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    /* Valentine's — soft pinks and reds */
+    .theme-valentines {
+      --bg: #2a0a18; --bg-elevated: #3d1428; --bg-tertiary: #4d1a32; --bg-input: #2e0d1f;
+      --border: #5a2842; --border-hover: #7a3a5e;
+      --text: #fdf2f8; --text-muted: #d4a8b8; --text-dim: #9c7080;
+      --accent: #ec4899; --accent-hover: #db2777; --accent-text: #ffffff; --accent-soft: rgba(236,72,153,0.18);
+      --rgb-red: #f43f5e; --rgb-green: #10b981; --rgb-blue: #38bdf8; --rgb-amber: #fb923c; --rgb-purple: #c084fc;
+      --status-success: #10b981; --status-success-soft: rgba(16,185,129,0.15);
+      --status-warning: #f59e0b; --status-warning-soft: rgba(245,158,11,0.15);
+      --status-danger: #f43f5e;  --status-danger-soft: rgba(244,63,94,0.15);
+      --status-neutral: #71717a; --status-neutral-soft: rgba(113,113,122,0.2);
+      --shadow-card: 0 1px 3px rgba(0,0,0,0.3); --shadow-elevated: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    /* ============================================================
      * BASE STYLES
      * ============================================================ */
     * { box-sizing: border-box; }
@@ -196,6 +285,19 @@
       font-size: 0.85rem;
     }
     .theme-toggle:hover { color: var(--text); border-color: var(--border-hover); }
+    .theme-select {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 5px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-family: inherit;
+      max-width: 180px;
+    }
+    .theme-select:hover { border-color: var(--border-hover); }
+    .theme-select:focus { outline: none; border-color: var(--accent); }
 
     /* ============================================================
      * STATUS STRIP
@@ -611,6 +713,8 @@
     }
   </style>
   <script src="https://unpkg.com/monaco-editor@0.45.0/min/vs/loader.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.0/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body class="theme-stage-dark">
 
@@ -632,7 +736,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.9.2</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.10.0</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -640,7 +744,16 @@
         <span>·</span>
         <span><span id="headerPluginDot" class="plugin-dot offline"></span> <span id="headerPluginText">plugin</span></span>
       </span>
-      <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()" title="Toggle light/dark">◐</button>
+      <select id="themeSelect" class="theme-select" onchange="applyTheme(this.value)" title="Choose theme">
+        <option value="stage-dark">Stage · Dark</option>
+        <option value="stage-light">Stage · Light</option>
+        <option value="christmas">🎄 Christmas</option>
+        <option value="halloween">🎃 Halloween</option>
+        <option value="easter">🐰 Easter</option>
+        <option value="stpatricks">☘️ St. Patrick's</option>
+        <option value="independence">🎆 Independence Day</option>
+        <option value="valentines">💝 Valentine's</option>
+      </select>
       <button class="secondary" onclick="logout()">Log out</button>
     </header>
 
@@ -669,6 +782,8 @@
     <nav class="tab-nav">
       <button class="tab-btn active" data-tab="dashboard" onclick="switchMainTab('dashboard')">Dashboard</button>
       <button class="tab-btn" data-tab="sequences" onclick="switchMainTab('sequences')">Sequences</button>
+      <button class="tab-btn" data-tab="queue" onclick="switchMainTab('queue')">Queue</button>
+      <button class="tab-btn" data-tab="stats" onclick="switchMainTab('stats')">Stats</button>
       <button class="tab-btn" data-tab="viewer" onclick="switchMainTab('viewer')">Viewer Page</button>
       <button class="tab-btn" data-tab="settings" onclick="switchMainTab('settings')">Settings</button>
       <button class="tab-btn" data-tab="plugin" onclick="switchMainTab('plugin')">Plugin</button>
@@ -784,6 +899,86 @@
             <input type="text" id="newSeqDisplay" placeholder="Display name" style="flex:1;" />
             <input type="text" id="newSeqArtist" placeholder="Artist (optional)" style="flex:1;" />
             <button onclick="addSequence()">Add</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============================================================
+           TAB: QUEUE
+           ============================================================ -->
+      <div class="tab-pane" data-pane="queue">
+        <div class="card">
+          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+            <h2 style="margin: 0;">Queue</h2>
+            <div class="row" style="gap: 0.5rem; margin: 0;">
+              <button class="secondary" onclick="loadQueueTab()">Refresh</button>
+              <button class="danger" onclick="clearAllQueue()">Clear All</button>
+            </div>
+          </div>
+
+          <h3 style="font-size: 1rem; color: var(--text-muted); margin: 1rem 0 0.5rem;">Pending requests</h3>
+          <div id="queuePending" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
+
+          <h3 style="font-size: 1rem; color: var(--text-muted); margin: 1.5rem 0 0.5rem;">Recently played (last 20)</h3>
+          <div id="queueRecent" style="display: flex; flex-direction: column; gap: 0.4rem; opacity: 0.85;"></div>
+        </div>
+      </div>
+
+      <!-- ============================================================
+           TAB: STATS
+           ============================================================ -->
+      <div class="tab-pane" data-pane="stats">
+        <div class="card">
+          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+            <h2 style="margin: 0;">Stats</h2>
+            <div class="row" style="gap: 0.5rem; margin: 0;">
+              <button class="secondary" onclick="exportStatsCSV()">Export CSV</button>
+              <button class="secondary" onclick="exportStatsPDF()">Export PDF</button>
+            </div>
+          </div>
+
+          <div class="row" style="gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: end;">
+            <div>
+              <label style="display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem;">From</label>
+              <input type="date" id="statsFrom" onchange="loadStatsTab()" />
+            </div>
+            <div>
+              <label style="display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem;">To</label>
+              <input type="date" id="statsTo" onchange="loadStatsTab()" />
+            </div>
+            <button class="secondary" onclick="setStatsRange('today')">Today</button>
+            <button class="secondary" onclick="setStatsRange('week')">7 days</button>
+            <button class="secondary" onclick="setStatsRange('month')">30 days</button>
+            <button class="secondary" onclick="setStatsRange('all')">All time</button>
+          </div>
+
+          <div style="overflow-x: auto;">
+            <table id="statsTable" class="seq-table" style="width: 100%; border-collapse: collapse;">
+              <thead>
+                <tr>
+                  <th style="text-align: left;">Sequence</th>
+                  <th style="text-align: left;">Artist</th>
+                  <th style="text-align: right;">Plays</th>
+                  <th style="text-align: right;">From votes</th>
+                  <th style="text-align: right;">From requests</th>
+                  <th style="text-align: right;">Votes received</th>
+                  <th style="text-align: right;">Requests received</th>
+                  <th style="text-align: left;">Last played</th>
+                </tr>
+              </thead>
+              <tbody id="statsTableBody"></tbody>
+            </table>
+          </div>
+
+          <h3 style="font-size: 1rem; color: var(--text-muted); margin: 2rem 0 0.5rem;">Reset stats</h3>
+          <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0 0 0.75rem;">
+            Reset operations are immediate and can't be undone. Consider exporting first.
+          </p>
+          <div class="row" style="gap: 0.5rem; flex-wrap: wrap;">
+            <button class="danger" onclick="resetStats('play-history')">Reset Play History</button>
+            <button class="danger" onclick="resetStats('votes')">Reset Votes</button>
+            <button class="danger" onclick="resetStats('queue')">Clear Queue</button>
+            <button class="danger" onclick="resetStats('all')">Reset Everything</button>
           </div>
         </div>
       </div>
@@ -958,21 +1153,19 @@
     // ============================================================
     // THEME SYSTEM
     // ============================================================
+    const ALL_THEMES = ['stage-dark', 'stage-light', 'christmas', 'halloween', 'easter', 'stpatricks', 'independence', 'valentines'];
+    const LIGHT_THEMES = new Set(['stage-light', 'easter']);
+
     function applyTheme(theme) {
       const body = document.body;
-      body.classList.remove('theme-stage-dark', 'theme-stage-light');
+      ALL_THEMES.forEach(t => body.classList.remove('theme-' + t));
       body.classList.add('theme-' + theme);
       localStorage.setItem('openfalcon_theme', theme);
-      const btn = document.getElementById('themeToggleBtn');
-      if (btn) btn.textContent = theme === 'stage-light' ? '☀' : '◐';
-    }
-    function toggleTheme() {
-      const current = localStorage.getItem('openfalcon_theme') || 'stage-dark';
-      const next = current === 'stage-dark' ? 'stage-light' : 'stage-dark';
-      applyTheme(next);
-      // Update Monaco editor theme on the fly if it's loaded
+      const sel = document.getElementById('themeSelect');
+      if (sel) sel.value = theme;
+      // Update Monaco editor theme to match light/dark mode
       if (typeof monaco !== 'undefined' && monaco.editor) {
-        monaco.editor.setTheme(next === 'stage-light' ? 'vs' : 'vs-dark');
+        monaco.editor.setTheme(LIGHT_THEMES.has(theme) ? 'vs' : 'vs-dark');
       }
     }
     (function initTheme() {
@@ -992,6 +1185,9 @@
       });
       // Lazy-init Monaco when first visiting Viewer tab
       if (name === 'viewer') initMonacoIfNeeded();
+      // Refresh data when switching to these tabs
+      if (name === 'queue') loadQueueTab();
+      if (name === 'stats') loadStatsTab();
     }
 
     function copyShowToken() {
@@ -1621,7 +1817,12 @@
           // Live activity
           socket.on('voteUpdate', () => loadStats());
           socket.on('voteReset', () => loadStats());
-          socket.on('queueUpdated', () => loadStats());
+          socket.on('queueUpdated', () => {
+            loadStats();
+            // If queue tab is currently open, refresh its content too
+            const queuePane = document.querySelector('.tab-pane[data-pane="queue"]');
+            if (queuePane && queuePane.classList.contains('active')) loadQueueTab();
+          });
           socket.on('nowPlaying', () => loadStats());
 
           // Plugin status
@@ -1986,6 +2187,194 @@
         }
       }, 500);
     });
+
+    // ============================================================
+    // QUEUE TAB
+    // ============================================================
+    async function loadQueueTab() {
+      const r = await api('/queue');
+      if (!r.ok) return;
+      const { pending, recentlyPlayed } = r.data;
+      renderQueueList('queuePending', pending, true);
+      renderQueueList('queueRecent', recentlyPlayed, false);
+    }
+
+    function renderQueueList(elId, entries, allowDelete) {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      if (!entries || entries.length === 0) {
+        el.innerHTML = '<div style="color: var(--text-muted); font-style: italic; padding: 0.75rem 0;">— Empty —</div>';
+        return;
+      }
+      el.innerHTML = entries.map(q => {
+        const isPlaying = allowDelete && q.handed_off_at;
+        const cover = q.image_url
+          ? `<img src="${escapeAttr(q.image_url)}" style="width: 36px; height: 36px; border-radius: 4px; object-fit: cover; flex-shrink: 0;" alt="" />`
+          : `<div style="width: 36px; height: 36px; border-radius: 4px; background: var(--bg-tertiary); flex-shrink: 0;"></div>`;
+        const subtitle = isPlaying
+          ? '<span style="color: var(--status-success); font-weight: 600;">▶ Playing now</span>'
+          : (q.played_at
+              ? `played ${formatRelative(q.played_at)}`
+              : `requested ${formatRelative(q.requested_at)}`);
+        const removeBtn = (allowDelete && !isPlaying)
+          ? `<button class="secondary" onclick="removeQueueEntry(${q.id})" style="font-size: 0.75rem; padding: 4px 10px;">Remove</button>`
+          : '';
+        return `
+          <div style="display: flex; gap: 0.75rem; align-items: center; padding: 0.5rem 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px;">
+            ${cover}
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(q.display_name || q.sequence_name)}</div>
+              <div style="font-size: 0.78rem; color: var(--text-muted);">${escapeHtml(q.artist || '')} ${q.artist ? '·' : ''} ${subtitle}</div>
+            </div>
+            ${removeBtn}
+          </div>
+        `;
+      }).join('');
+    }
+
+    function formatRelative(timestamp) {
+      if (!timestamp) return '';
+      const d = new Date(timestamp.replace(' ', 'T') + 'Z');
+      const now = Date.now();
+      const diff = Math.floor((now - d.getTime()) / 1000);
+      if (diff < 60) return `${diff}s ago`;
+      if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+      if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+      return d.toLocaleString();
+    }
+
+    async function removeQueueEntry(id) {
+      if (!confirm('Remove this request from the queue?')) return;
+      const r = await api(`/queue/${id}`, { method: 'DELETE' });
+      if (r.ok) loadQueueTab();
+    }
+
+    async function clearAllQueue() {
+      if (!confirm('Clear the entire queue?\nAll pending requests will be removed.\nThis cannot be undone.')) return;
+      const r = await api('/stats/reset/queue', { method: 'POST' });
+      if (r.ok) loadQueueTab();
+    }
+
+    // ============================================================
+    // STATS TAB
+    // ============================================================
+    let statsCache = null;
+
+    function setStatsRange(range) {
+      const now = new Date();
+      const fmt = d => d.toISOString().slice(0, 10);
+      const fromEl = document.getElementById('statsFrom');
+      const toEl = document.getElementById('statsTo');
+      if (range === 'today') {
+        fromEl.value = fmt(now); toEl.value = fmt(now);
+      } else if (range === 'week') {
+        const w = new Date(now); w.setDate(w.getDate() - 7);
+        fromEl.value = fmt(w); toEl.value = fmt(now);
+      } else if (range === 'month') {
+        const m = new Date(now); m.setDate(m.getDate() - 30);
+        fromEl.value = fmt(m); toEl.value = fmt(now);
+      } else {
+        fromEl.value = ''; toEl.value = '';
+      }
+      loadStatsTab();
+    }
+
+    async function loadStatsTab() {
+      const from = document.getElementById('statsFrom')?.value || '';
+      const to = document.getElementById('statsTo')?.value || '';
+      const params = new URLSearchParams();
+      if (from) params.append('from', from);
+      if (to) params.append('to', to);
+      const r = await api('/stats/sequences' + (params.toString() ? '?' + params : ''));
+      if (!r.ok) return;
+      statsCache = r.data;
+
+      const tbody = document.getElementById('statsTableBody');
+      if (!tbody) return;
+      tbody.innerHTML = (r.data.rows || []).map(row => `
+        <tr>
+          <td>${escapeHtml(row.display_name)}</td>
+          <td>${escapeHtml(row.artist || '')}</td>
+          <td style="text-align: right;">${row.total_played}</td>
+          <td style="text-align: right;">${row.votes_played}</td>
+          <td style="text-align: right;">${row.requests_played}</td>
+          <td style="text-align: right;">${row.votes_received}</td>
+          <td style="text-align: right;">${row.requests_received}</td>
+          <td>${row.last_played_at ? new Date(row.last_played_at.replace(' ', 'T') + 'Z').toLocaleString() : '—'}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 1rem;">No data</td></tr>';
+    }
+
+    function exportStatsCSV() {
+      const from = document.getElementById('statsFrom')?.value || '';
+      const to = document.getElementById('statsTo')?.value || '';
+      const params = new URLSearchParams();
+      if (from) params.append('from', from);
+      if (to) params.append('to', to);
+      window.location = '/api/admin/stats/sequences.csv' + (params.toString() ? '?' + params : '');
+    }
+
+    function exportStatsPDF() {
+      if (!statsCache || !statsCache.rows) {
+        alert('Load stats first, then export');
+        return;
+      }
+      if (typeof window.jspdf === 'undefined') {
+        alert('PDF library not loaded yet — try again in a moment');
+        return;
+      }
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ orientation: 'landscape' });
+
+      const dateStr = new Date().toLocaleString();
+      const range = (statsCache.from || statsCache.to)
+        ? `${statsCache.from || 'Start'} → ${statsCache.to || 'Now'}`
+        : 'All time';
+
+      doc.setFontSize(16);
+      doc.text('OpenFalcon — Sequence Stats', 14, 15);
+      doc.setFontSize(10);
+      doc.setTextColor(100);
+      doc.text(`Range: ${range}  ·  Generated: ${dateStr}`, 14, 22);
+
+      const body = statsCache.rows.map(r => [
+        r.display_name,
+        r.artist || '',
+        r.total_played,
+        r.votes_played,
+        r.requests_played,
+        r.votes_received,
+        r.requests_received,
+        r.last_played_at ? new Date(r.last_played_at.replace(' ', 'T') + 'Z').toLocaleDateString() : '—',
+      ]);
+
+      doc.autoTable({
+        startY: 27,
+        head: [['Sequence', 'Artist', 'Plays', 'Votes Played', 'Requests Played', 'Votes Received', 'Requests Received', 'Last Played']],
+        body,
+        theme: 'striped',
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [239, 68, 68] },
+      });
+
+      doc.save(`openfalcon-stats-${new Date().toISOString().slice(0,10)}.pdf`);
+    }
+
+    async function resetStats(scope) {
+      const messages = {
+        'play-history': 'Reset all play history?\nAll play counts will be cleared.\nSequences history is gone forever.',
+        'votes': 'Reset all votes?\nAll votes from this round and previous rounds will be cleared.',
+        'queue': 'Clear the queue?\nAll pending viewer requests will be removed.',
+        'all': 'RESET EVERYTHING?\nThis clears: play history, all votes, queue, and resets last-played dates.\nThis cannot be undone.',
+      };
+      if (!confirm(messages[scope] || 'Confirm reset?')) return;
+      const r = await api(`/stats/reset/${scope}`, { method: 'POST' });
+      if (r.ok) {
+        loadStatsTab();
+        loadQueueTab();
+        if (typeof loadStats === 'function') loadStats();
+      }
+    }
   </script>
 </body>
 </html>

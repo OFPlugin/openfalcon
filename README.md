@@ -27,7 +27,7 @@ OpenFalcon does not require AVX2/AVX-capable CPUs. It runs fine on basic ARM/Ato
 ## Quick start
 
 ```bash
-git clone https://github.com/frankietest6/openfalcon.git
+git clone https://github.com/OFPlugin/openfalcon.git
 cd openfalcon
 npm install
 cp config.example.js config.js
@@ -44,7 +44,7 @@ OpenFalcon listens on `http://0.0.0.0:3100` by default.
 
 ## FPP plugin
 
-You also need the companion FPP plugin: [openfalcon-plugin](https://github.com/frankietest6/openfalcon-plugin).
+You also need the companion FPP plugin: [openfalcon-plugin](https://github.com/OFPlugin/openfalcon-plugin).
 
 Install it on your FPP, paste the OpenFalcon Server URL and Show Token (visible in the OpenFalcon admin page) into the plugin config, pick a "remote playlist" (the pool of sequences viewers can pick from), and click **Sync Playlist**.
 

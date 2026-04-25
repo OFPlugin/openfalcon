@@ -16,7 +16,7 @@ sudo apt-get install -y nodejs git
 sudo npm install -g pm2
 
 # 3. Clone OpenFalcon
-sudo git clone https://github.com/frankietest6/openfalcon.git /opt/openfalcon
+sudo git clone https://github.com/OFPlugin/openfalcon.git /opt/openfalcon
 sudo chown -R $USER:$USER /opt/openfalcon
 cd /opt/openfalcon
 
@@ -53,7 +53,7 @@ sudo mv /opt/openfalcon /opt/openfalcon.pre-git
 pkill -f "node server.js" 2>/dev/null
 
 # Clone
-sudo git clone https://github.com/frankietest6/openfalcon.git /opt/openfalcon
+sudo git clone https://github.com/OFPlugin/openfalcon.git /opt/openfalcon
 sudo chown -R $USER:$USER /opt/openfalcon
 cd /opt/openfalcon
 npm install --omit=dev

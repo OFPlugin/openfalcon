@@ -611,4 +611,225 @@ router.post('/sequences/scrape-all-metadata', requireAdmin, async (req, res) => 
   if (io) io.emit('sequencesReordered'); // reuse existing event — admin reloads list
 });
 
+// ============================================================
+// Per-sequence stats report
+// Returns one row per sequence with plays/votes/requests/last_played.
+// Optional ?from=YYYY-MM-DD&to=YYYY-MM-DD to scope the date range.
+// ============================================================
+router.get('/stats/sequences', requireAdmin, (req, res) => {
+  const from = req.query.from ? String(req.query.from) : null;
+  const to = req.query.to ? String(req.query.to) : null;
+
+  // SQL date scoping clause
+  let dateClause = '';
+  const dateParams = [];
+  if (from) { dateClause += ' AND played_at >= ?'; dateParams.push(from + ' 00:00:00'); }
+  if (to)   { dateClause += ' AND played_at <= ?'; dateParams.push(to + ' 23:59:59'); }
+
+  const sequences = db.prepare(`
+    SELECT id, name, display_name, artist, image_url, last_played_at
+    FROM sequences ORDER BY display_order, display_name
+  `).all();
+
+  // Plays per sequence (viewer-driven only)
+  const playsBySource = db.prepare(`
+    SELECT sequence_name,
+           SUM(CASE WHEN source = 'vote' THEN 1 ELSE 0 END) AS votes_played,
+           SUM(CASE WHEN source = 'request' THEN 1 ELSE 0 END) AS requests_played,
+           SUM(CASE WHEN source = 'psa' THEN 1 ELSE 0 END) AS psa_played,
+           SUM(CASE WHEN source = 'schedule' THEN 1 ELSE 0 END) AS schedule_played,
+           COUNT(*) AS total_played,
+           MAX(played_at) AS last_played_history
+    FROM play_history
+    WHERE 1=1${dateClause}
+    GROUP BY sequence_name
+  `).all(...dateParams);
+
+  // Build lookup for fast merge
+  const playsMap = {};
+  for (const row of playsBySource) playsMap[row.sequence_name] = row;
+
+  // Total votes received per sequence (across all time — votes don't have played_at, just timestamp)
+  const voteParams = [];
+  let voteDateClause = '';
+  if (from) { voteDateClause += ' AND voted_at >= ?'; voteParams.push(from + ' 00:00:00'); }
+  if (to)   { voteDateClause += ' AND voted_at <= ?'; voteParams.push(to + ' 23:59:59'); }
+  const votesReceived = db.prepare(`
+    SELECT sequence_name, COUNT(*) AS votes_received
+    FROM votes
+    WHERE 1=1${voteDateClause}
+    GROUP BY sequence_name
+  `).all(...voteParams);
+  const votesMap = {};
+  for (const row of votesReceived) votesMap[row.sequence_name] = row.votes_received;
+
+  // Total requests received per sequence
+  const reqParams = [];
+  let reqDateClause = '';
+  if (from) { reqDateClause += ' AND requested_at >= ?'; reqParams.push(from + ' 00:00:00'); }
+  if (to)   { reqDateClause += ' AND requested_at <= ?'; reqParams.push(to + ' 23:59:59'); }
+  const requestsReceived = db.prepare(`
+    SELECT sequence_name, COUNT(*) AS requests_received
+    FROM jukebox_queue
+    WHERE 1=1${reqDateClause}
+    GROUP BY sequence_name
+  `).all(...reqParams);
+  const requestsMap = {};
+  for (const row of requestsReceived) requestsMap[row.sequence_name] = row.requests_received;
+
+  const rows = sequences.map(seq => {
+    const p = playsMap[seq.name] || {};
+    return {
+      id: seq.id,
+      name: seq.name,
+      display_name: seq.display_name || seq.name,
+      artist: seq.artist || '',
+      image_url: seq.image_url || null,
+      total_played: p.total_played || 0,
+      votes_played: p.votes_played || 0,
+      requests_played: p.requests_played || 0,
+      psa_played: p.psa_played || 0,
+      schedule_played: p.schedule_played || 0,
+      votes_received: votesMap[seq.name] || 0,
+      requests_received: requestsMap[seq.name] || 0,
+      last_played_at: p.last_played_history || seq.last_played_at,
+    };
+  });
+
+  // Sort by viewer-driven plays desc by default
+  rows.sort((a, b) =>
+    (b.votes_played + b.requests_played) - (a.votes_played + a.requests_played)
+  );
+
+  res.json({ rows, from, to });
+});
+
+// CSV export
+router.get('/stats/sequences.csv', requireAdmin, (req, res) => {
+  // Reuse the sequences endpoint logic — just call ourselves internally
+  // by duplicating the query. Simpler than abstracting since it's a small endpoint.
+  const from = req.query.from ? String(req.query.from) : null;
+  const to = req.query.to ? String(req.query.to) : null;
+  let dateClause = '';
+  const dateParams = [];
+  if (from) { dateClause += ' AND played_at >= ?'; dateParams.push(from + ' 00:00:00'); }
+  if (to)   { dateClause += ' AND played_at <= ?'; dateParams.push(to + ' 23:59:59'); }
+
+  const sequences = db.prepare(`SELECT name, display_name, artist FROM sequences ORDER BY display_name`).all();
+  const playsBySource = db.prepare(`
+    SELECT sequence_name,
+           SUM(CASE WHEN source = 'vote' THEN 1 ELSE 0 END) AS votes_played,
+           SUM(CASE WHEN source = 'request' THEN 1 ELSE 0 END) AS requests_played,
+           COUNT(*) AS total_played,
+           MAX(played_at) AS last_played_history
+    FROM play_history
+    WHERE 1=1${dateClause}
+    GROUP BY sequence_name
+  `).all(...dateParams);
+  const playsMap = {};
+  for (const row of playsBySource) playsMap[row.sequence_name] = row;
+
+  const csvEscape = (v) => {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const lines = ['Sequence,Artist,Total Plays,Votes Played,Requests Played,Last Played'];
+  for (const seq of sequences) {
+    const p = playsMap[seq.name] || {};
+    lines.push([
+      csvEscape(seq.display_name || seq.name),
+      csvEscape(seq.artist || ''),
+      p.total_played || 0,
+      p.votes_played || 0,
+      p.requests_played || 0,
+      csvEscape(p.last_played_history || ''),
+    ].join(','));
+  }
+
+  res.set('Content-Type', 'text/csv');
+  res.set('Content-Disposition', `attachment; filename="openfalcon-stats-${new Date().toISOString().slice(0,10)}.csv"`);
+  res.send(lines.join('\n'));
+});
+
+// ============================================================
+// Reset stats — separate endpoints for granular resets
+// ============================================================
+router.post('/stats/reset/play-history', requireAdmin, (req, res) => {
+  db.prepare(`DELETE FROM play_history`).run();
+  db.prepare(`UPDATE sequences SET last_played_at = NULL, plays_since_hidden = 0`).run();
+  const io = req.app.get('io');
+  if (io) io.emit('sequencesReordered');
+  res.json({ ok: true });
+});
+
+router.post('/stats/reset/votes', requireAdmin, (req, res) => {
+  db.prepare(`DELETE FROM votes`).run();
+  // Reset round counter so a fresh round starts cleanly
+  const cfg = getConfig();
+  updateConfig({ current_voting_round: (cfg.current_voting_round || 0) + 1 });
+  const io = req.app.get('io');
+  if (io) io.emit('voteReset');
+  res.json({ ok: true });
+});
+
+router.post('/stats/reset/queue', requireAdmin, (req, res) => {
+  db.prepare(`DELETE FROM jukebox_queue`).run();
+  const io = req.app.get('io');
+  if (io) io.emit('queueUpdated');
+  res.json({ ok: true });
+});
+
+router.post('/stats/reset/all', requireAdmin, (req, res) => {
+  db.prepare(`DELETE FROM play_history`).run();
+  db.prepare(`DELETE FROM votes`).run();
+  db.prepare(`DELETE FROM jukebox_queue`).run();
+  db.prepare(`UPDATE sequences SET last_played_at = NULL, plays_since_hidden = 0`).run();
+  const cfg = getConfig();
+  updateConfig({ current_voting_round: (cfg.current_voting_round || 0) + 1 });
+  const io = req.app.get('io');
+  if (io) {
+    io.emit('sequencesReordered');
+    io.emit('voteReset');
+    io.emit('queueUpdated');
+  }
+  res.json({ ok: true });
+});
+
+// ============================================================
+// Queue management — full queue with admin remove
+// ============================================================
+router.get('/queue', requireAdmin, (req, res) => {
+  // Return the full queue: pending (handed_off_at IS NULL), in-flight (NOT NULL & played=0), and recently played
+  const pending = db.prepare(`
+    SELECT q.id, q.sequence_name, q.requested_at, q.viewer_token, q.handed_off_at, q.played,
+           s.display_name, s.artist, s.image_url
+    FROM jukebox_queue q
+    LEFT JOIN sequences s ON s.name = q.sequence_name
+    WHERE q.played = 0
+    ORDER BY q.requested_at ASC
+  `).all();
+
+  const recentlyPlayed = db.prepare(`
+    SELECT q.id, q.sequence_name, q.requested_at, q.played_at,
+           s.display_name, s.artist, s.image_url
+    FROM jukebox_queue q
+    LEFT JOIN sequences s ON s.name = q.sequence_name
+    WHERE q.played = 1
+    ORDER BY q.played_at DESC
+    LIMIT 20
+  `).all();
+
+  res.json({ pending, recentlyPlayed });
+});
+
+router.delete('/queue/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  db.prepare(`DELETE FROM jukebox_queue WHERE id = ?`).run(id);
+  const io = req.app.get('io');
+  if (io) io.emit('queueUpdated');
+  res.json({ ok: true });
+});
+
 module.exports = router;
