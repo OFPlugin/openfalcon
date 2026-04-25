@@ -176,10 +176,18 @@ setInterval(() => {
 // POST /api/plugin/playing
 // ============================================================
 router.post('/playing', (req, res) => {
-  const { sequence } = req.body || {};
+  const { sequence, seconds_played } = req.body || {};
   const name = (sequence || '').trim();
 
-  setNowPlaying(name || null);
+  // If the plugin reported a playback position, backdate started_at so the
+  // audio player knows the song has been playing for that long. This handles
+  // the "interrupt-then-resume" case: when FPP plays a request and then comes
+  // back to the original song mid-track, seconds_played > 0 and we shouldn't
+  // pretend the song just started.
+  const playedSec = (typeof seconds_played === 'number' && isFinite(seconds_played) && seconds_played > 0)
+    ? seconds_played
+    : 0;
+  setNowPlaying(name || null, playedSec);
 
   if (name) {
     // Determine source: was this sequence just handed out to the plugin (viewer-driven),
