@@ -115,9 +115,17 @@ router.put('/config', requireAdmin, (req, res) => {
   }
 
   // When admin sets viewer_control_mode to something other than OFF, remember it
-  // so the FPP "Turn On" command can restore it later.
+  // so the FPP "Turn On" command (and admin's Turn On toggle) can restore it later.
   if (updates.viewer_control_mode && updates.viewer_control_mode !== 'OFF') {
     updates.last_active_mode = updates.viewer_control_mode;
+  }
+
+  // When admin sets mode to OFF, stash the CURRENT (pre-change) mode so we can restore it
+  if (updates.viewer_control_mode === 'OFF') {
+    const cfg = getConfig();
+    if (cfg.viewer_control_mode && cfg.viewer_control_mode !== 'OFF') {
+      updates.last_active_mode = cfg.viewer_control_mode;
+    }
   }
 
   updateConfig(updates);

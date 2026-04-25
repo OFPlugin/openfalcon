@@ -610,7 +610,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.7.3</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.7.5</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1123,15 +1123,13 @@
 
     async function toggleViewerControl() {
       const current = document.getElementById('modeSelect').value;
-      const next = (current === 'OFF') ? 'ON-RESTORE' : 'OFF';
-      // "ON-RESTORE" means: use whatever mode the select dropdown is set to IF non-OFF,
-      // otherwise fall back to VOTING. We resolve this on the client to keep admin simple.
-      if (next === 'OFF') {
+      if (current !== 'OFF') {
+        // Currently on — turn off. Server-side, this stashes the current mode.
         await updateMode('OFF');
       } else {
-        // Go to the dropdown's non-OFF value; if dropdown is OFF, default to VOTING
-        const dropdown = document.getElementById('modeSelect').value;
-        const restored = dropdown === 'OFF' ? 'VOTING' : dropdown;
+        // Currently off — restore last active mode from config (saved when last turned off)
+        const r = await api('/config');
+        const restored = (r.ok && r.data && r.data.last_active_mode) ? r.data.last_active_mode : 'VOTING';
         document.getElementById('modeSelect').value = restored;
         await updateMode(restored);
       }
@@ -1355,7 +1353,8 @@
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ viewer_control_mode: mode }),
       });
-      updateViewerControlBadge(mode);
+      // Re-fetch config so we get the server-saved last_active_mode
+      await loadConfig();
       loadStats();
     }
 
@@ -1405,6 +1404,15 @@
     checkAuth();
     setInterval(() => { if (!document.getElementById('appView').classList.contains('hidden')) loadStats(); }, 5000);
 
+    // Also poll config every 5s so the mode dropdown + badge stay in sync with
+    // external changes (FPP scheduler commands, other admin tabs) even if the
+    // socket disconnects.
+    setInterval(() => {
+      if (!document.getElementById('appView').classList.contains('hidden')) {
+        loadConfig();
+      }
+    }, 5000);
+
     // Listen for external mode changes (FPP scheduler commands, other admin tabs, etc.)
     try {
       const adminSocketScript = document.createElement('script');
@@ -1412,12 +1420,30 @@
       adminSocketScript.onload = () => {
         try {
           const socket = io();
-          socket.on('viewerModeChanged', (data) => {
-            if (data && data.mode) {
-              document.getElementById('modeSelect').value = data.mode;
-              updateViewerControlBadge(data.mode);
-            }
+
+          // Mode changes (from FPP commands, other admin tabs, plugin requests)
+          socket.on('viewerModeChanged', async (data) => {
+            if (!data || !data.mode) return;
+            const sel = document.getElementById('modeSelect');
+            if (sel) sel.value = data.mode;
+            await loadConfig();   // refreshes lastActiveMode + badge
+            loadStats();
           });
+
+          // Sequence updates (sync from plugin, admin reorder, etc.)
+          socket.on('sequencesSynced', () => { loadSequences(); loadStats(); });
+          socket.on('sequencesReordered', () => loadSequences());
+
+          // Live activity
+          socket.on('voteUpdate', () => loadStats());
+          socket.on('voteReset', () => loadStats());
+          socket.on('queueUpdated', () => loadStats());
+          socket.on('nowPlaying', () => loadStats());
+
+          // Plugin status
+          socket.on('pluginStatus', () => loadPluginStatus());
+
+          window.__openfalconSocket = socket;
         } catch (e) { /* non-fatal */ }
       };
       document.head.appendChild(adminSocketScript);
@@ -1667,7 +1693,11 @@
       updateModePill(mode);
     };
 
-    // Override updateViewerControlBadge to use pill classes (no inline styles)
+    // Track last active mode so the OFF state badge can show what Turn On would restore
+    let lastActiveMode = 'VOTING';
+
+    // Override updateViewerControlBadge to use pill classes (no inline styles) AND
+    // surface the restoration target while OFF.
     if (typeof updateViewerControlBadge === 'function') {
       window.updateViewerControlBadge = function(mode) {
         const badge = document.getElementById('viewerControlStatus');
@@ -1675,8 +1705,8 @@
         if (!badge) return;
         if (mode === 'OFF') {
           badge.className = 'pill pill-danger';
-          badge.textContent = 'OFF';
-          if (btn) { btn.textContent = 'Turn On'; btn.className = ''; }
+          badge.textContent = 'OFF · was ' + lastActiveMode;
+          if (btn) { btn.textContent = 'Turn On (' + lastActiveMode + ')'; btn.className = ''; }
         } else {
           badge.className = 'pill pill-success';
           badge.textContent = 'ON · ' + mode;
@@ -1748,13 +1778,18 @@
       }
     };
 
-    // Override loadConfig to update mode pill + pull current config into form fields
+    // Override loadConfig to update mode pill + capture last_active_mode
     if (typeof loadConfig === 'function') {
       const orig_loadConfig = loadConfig;
       window.loadConfig = async function() {
         await orig_loadConfig();
         const r = await api('/config');
-        if (r.ok) updateModePill(r.data.viewer_control_mode);
+        if (r.ok) {
+          updateModePill(r.data.viewer_control_mode);
+          lastActiveMode = r.data.last_active_mode || 'VOTING';
+          // Refresh badge with the now-correct lastActiveMode
+          updateViewerControlBadge(r.data.viewer_control_mode);
+        }
       };
     }
 
