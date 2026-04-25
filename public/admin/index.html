@@ -997,7 +997,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.13.0</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.13.1</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -3113,16 +3113,18 @@
       currentSettings = tpl.settings_json ? safeJsonParse(tpl.settings_json) || {} : {};
       currentBlocks = tpl.blocks_json ? safeJsonParse(tpl.blocks_json) || [] : [];
 
-      // Populate UI for whichever mode it's in
+      // Populate all three modes so the user sees content immediately when
+      // they switch tabs. Monaco gets the latest html (draft if pending).
       loadSettingsForm(currentSettings);
       renderBlocksCanvas();
-      switchDesignerTab(mode);
-
-      // For Code mode, load HTML into Monaco
-      if (mode === 'code' || mode === undefined) {
-        await initMonacoIfNeeded();
-        if (monacoEditor) monacoEditor.setValue(tpl.html || '');
+      await initMonacoIfNeeded();
+      if (monacoEditor) {
+        const codeContent = tpl.draft_html || tpl.html || '';
+        if (monacoEditor.getValue() !== codeContent) {
+          monacoEditor.setValue(codeContent);
+        }
       }
+      switchDesignerTab(mode);
 
       // Show the live preview
       refreshPreview();
@@ -3210,7 +3212,13 @@
       document.querySelectorAll('.designer-pane').forEach(p => {
         p.style.display = p.dataset.designerPane === name ? '' : 'none';
       });
-      if (name === 'code') initMonacoIfNeeded();
+      if (name === 'code') {
+        initMonacoIfNeeded().then(() => {
+          // Monaco needs a layout call after its container goes from
+          // display:none to display:block, otherwise it renders at 0 size
+          if (monacoEditor) setTimeout(() => monacoEditor.layout(), 0);
+        });
+      }
       // Re-render preview using the new mode's source of truth
       saveDraftSoon();
     }
@@ -3425,7 +3433,17 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (r.ok) refreshPreview();
+      if (r.ok) {
+        // Mirror the generated HTML into Monaco so switching to Code tab
+        // shows what Settings/Blocks produced. Skip if user is currently
+        // typing in Code (to avoid clobbering their cursor position).
+        if (currentMode !== 'code' && monacoEditor && r.data?.html) {
+          if (monacoEditor.getValue() !== r.data.html) {
+            monacoEditor.setValue(r.data.html);
+          }
+        }
+        refreshPreview();
+      }
     }
 
     function refreshPreview() {
