@@ -383,49 +383,49 @@
         transition: background 0.4s, border-color 0.4s, box-shadow 0.4s;
       }
       #of-listen-panel.of-theme-christmas {
-        --of-bg: linear-gradient(180deg, rgba(60,15,20,0.97), rgba(20,30,20,0.97));
-        --of-border: rgba(239,68,68,0.5);
-        --of-glow: rgba(239,68,68,0.3);
+        --of-bg: linear-gradient(180deg, rgba(127,29,29,0.97), rgba(20,83,45,0.97));
+        --of-border: rgba(254,202,202,0.8);
+        --of-glow: rgba(239,68,68,0.5);
       }
       #of-listen-panel.of-theme-halloween {
-        --of-bg: linear-gradient(180deg, rgba(30,10,40,0.97), rgba(50,20,5,0.97));
-        --of-border: rgba(251,146,60,0.6);
-        --of-glow: rgba(251,146,60,0.35);
+        --of-bg: linear-gradient(180deg, rgba(88,28,135,0.97), rgba(154,52,18,0.97));
+        --of-border: rgba(253,186,116,0.8);
+        --of-glow: rgba(251,146,60,0.5);
       }
       #of-listen-panel.of-theme-easter {
-        --of-bg: linear-gradient(180deg, rgba(120,80,140,0.97), rgba(60,90,120,0.97));
-        --of-border: rgba(251,207,232,0.6);
-        --of-glow: rgba(251,207,232,0.3);
+        --of-bg: linear-gradient(180deg, rgba(168,85,247,0.95), rgba(96,165,250,0.95));
+        --of-border: rgba(251,207,232,0.9);
+        --of-glow: rgba(251,207,232,0.5);
       }
       #of-listen-panel.of-theme-stpatricks {
-        --of-bg: linear-gradient(180deg, rgba(15,50,30,0.97), rgba(8,30,18,0.97));
-        --of-border: rgba(34,197,94,0.6);
-        --of-glow: rgba(34,197,94,0.3);
+        --of-bg: linear-gradient(180deg, rgba(21,128,61,0.97), rgba(20,83,45,0.97));
+        --of-border: rgba(134,239,172,0.8);
+        --of-glow: rgba(34,197,94,0.5);
       }
       #of-listen-panel.of-theme-independence {
-        --of-bg: linear-gradient(180deg, rgba(20,30,80,0.97), rgba(80,20,30,0.97));
-        --of-border: rgba(255,255,255,0.5);
-        --of-glow: rgba(96,165,250,0.4);
+        --of-bg: linear-gradient(180deg, rgba(30,64,175,0.97), rgba(153,27,27,0.97));
+        --of-border: rgba(255,255,255,0.85);
+        --of-glow: rgba(96,165,250,0.5);
       }
       #of-listen-panel.of-theme-valentines {
-        --of-bg: linear-gradient(180deg, rgba(80,20,50,0.97), rgba(50,15,40,0.97));
-        --of-border: rgba(244,114,182,0.6);
-        --of-glow: rgba(244,114,182,0.4);
+        --of-bg: linear-gradient(180deg, rgba(190,24,93,0.97), rgba(112,26,117,0.97));
+        --of-border: rgba(251,207,232,0.85);
+        --of-glow: rgba(244,114,182,0.5);
       }
       #of-listen-panel.of-theme-hanukkah {
-        --of-bg: linear-gradient(180deg, rgba(15,30,60,0.97), rgba(10,20,40,0.97));
-        --of-border: rgba(96,165,250,0.6);
-        --of-glow: rgba(96,165,250,0.4);
+        --of-bg: linear-gradient(180deg, rgba(29,78,216,0.97), rgba(30,58,138,0.97));
+        --of-border: rgba(191,219,254,0.85);
+        --of-glow: rgba(96,165,250,0.5);
       }
       #of-listen-panel.of-theme-thanksgiving {
-        --of-bg: linear-gradient(180deg, rgba(60,30,10,0.97), rgba(40,20,5,0.97));
-        --of-border: rgba(234,88,12,0.6);
-        --of-glow: rgba(234,88,12,0.3);
+        --of-bg: linear-gradient(180deg, rgba(154,52,18,0.97), rgba(120,53,15,0.97));
+        --of-border: rgba(253,186,116,0.8);
+        --of-glow: rgba(234,88,12,0.5);
       }
       #of-listen-panel.of-theme-snow {
-        --of-bg: linear-gradient(180deg, rgba(15,25,50,0.97), rgba(8,15,35,0.97));
-        --of-border: rgba(186,230,253,0.6);
-        --of-glow: rgba(186,230,253,0.4);
+        --of-bg: linear-gradient(180deg, rgba(30,64,175,0.95), rgba(15,23,42,0.97));
+        --of-border: rgba(186,230,253,0.85);
+        --of-glow: rgba(186,230,253,0.5);
       }
     `;
     document.head.appendChild(themeStyle);
