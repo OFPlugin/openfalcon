@@ -1012,7 +1012,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.13.5</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.13.6</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -2285,10 +2285,32 @@
     // reload flicker every 5 seconds). We only swap the iframe src when the
     // computed URL actually changes.
     let _lastMapSrc = null;
+    let _mapResizeAttached = false;
     function updateLocationMap() {
       const mapEl = document.getElementById('locationMap');
-      const hint = document.getElementById('locationMapHint');
       if (!mapEl) return;
+      // First-call protection: if the map container isn't laid out yet
+      // (e.g. user just switched into the Settings tab), defer one frame so
+      // mapEl.clientWidth returns the real width instead of 0.
+      if (!mapEl.clientWidth) {
+        requestAnimationFrame(() => updateLocationMap());
+        return;
+      }
+      // Re-render on window resize so the bbox aspect ratio stays matched
+      // to the container. Attached only once per page lifetime.
+      if (!_mapResizeAttached) {
+        _mapResizeAttached = true;
+        let resizeTimer = null;
+        window.addEventListener('resize', () => {
+          if (resizeTimer) clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(() => {
+            // Force a rebuild on resize even though src may not change
+            _lastMapSrc = null;
+            updateLocationMap();
+          }, 200);
+        });
+      }
+      const hint = document.getElementById('locationMapHint');
       const lat = parseFloat(document.getElementById('cfg_show_latitude').value);
       const lng = parseFloat(document.getElementById('cfg_show_longitude').value);
       const radiusMi = parseFloat(document.getElementById('cfg_check_radius_miles').value) || 1.0;
@@ -2300,12 +2322,29 @@
         if (hint) hint.textContent = '';
         return;
       }
-      // Compute a bounding box that comfortably contains the radius
-      // 1 deg latitude ≈ 69 mi; 1 deg longitude ≈ 69·cos(lat) mi
-      // Pad bbox to ~1.5x the radius so the circle isn't flush against the edges
+      // Compute a bounding box that comfortably contains the radius.
+      // 1 deg latitude ≈ 69 mi everywhere; 1 deg longitude ≈ 69·cos(lat) mi.
+      // Match the bbox aspect ratio to the container's aspect ratio so OSM's
+      // embed fills the iframe instead of letterboxing inside it. Without
+      // this, a small radius (~square real-world area) gets rendered narrow
+      // inside a wide iframe, leaving big empty bands of whitespace.
+      const containerW = mapEl.clientWidth || 600;
+      const containerH = mapEl.clientHeight || 260;
+      const containerAspect = containerW / containerH;
       const padMi = radiusMi * 1.5;
-      const dLat = padMi / 69;
-      const dLng = padMi / (69 * Math.max(0.0001, Math.cos(lat * Math.PI / 180)));
+      // We need the bbox to be (containerAspect) times wider than tall in
+      // real-world miles. The smaller dimension uses padMi; the larger
+      // gets padMi * containerAspect (if wider) or padMi / containerAspect (if taller).
+      let widthMi, heightMi;
+      if (containerAspect >= 1) {
+        heightMi = padMi;
+        widthMi = padMi * containerAspect;
+      } else {
+        widthMi = padMi;
+        heightMi = padMi / containerAspect;
+      }
+      const dLat = heightMi / 69;
+      const dLng = widthMi / (69 * Math.max(0.0001, Math.cos(lat * Math.PI / 180)));
       const minLng = (lng - dLng).toFixed(6);
       const minLat = (lat - dLat).toFixed(6);
       const maxLng = (lng + dLng).toFixed(6);
