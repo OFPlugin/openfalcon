@@ -145,6 +145,7 @@ router.put('/config', requireAdmin, (req, res) => {
     'public_base_url',
     'audio_gate_enabled',
     'audio_gate_radius_miles',
+    'viewer_source_obfuscate',
   ];
   const updates = {};
   for (const k of allowed) {
