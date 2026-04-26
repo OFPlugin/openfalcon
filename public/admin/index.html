@@ -258,6 +258,23 @@
       font-weight: 400;
       margin-left: 0.4rem;
     }
+    /* Beta pill — appears next to the version when the running build is
+       a beta. Uses warning-orange so it's visually distinct from the
+       normal version label and impossible to miss in a screenshot. */
+    .app-brand .app-beta-pill {
+      display: inline-block;
+      margin-left: 0.4rem;
+      padding: 1px 8px;
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #fff;
+      background: var(--status-warning, #f59e0b);
+      border-radius: 999px;
+      vertical-align: middle;
+      box-shadow: 0 0 6px rgba(245,158,11,0.4);
+    }
     .mode-pill {
       font-size: 0.72rem;
       padding: 4px 10px;
@@ -1275,7 +1292,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.18.17</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.19.0-beta</span><span class="app-beta-pill">Beta</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">

@@ -704,6 +704,13 @@ router.get('/show-token', requireAdmin, (req, res) => {
   res.json({ showToken: config.showToken });
 });
 
+// Audio cache stats — file count and total bytes used. Drives the
+// "Audio cache: N files, X MB" display in the admin Settings tab.
+router.get('/audio-cache/stats', requireAdmin, (req, res) => {
+  const audioCache = require('../lib/audio-cache');
+  res.json(audioCache.getCacheStats());
+});
+
 // ============================================================
 // Viewer Page Templates (CRUD)
 // ============================================================

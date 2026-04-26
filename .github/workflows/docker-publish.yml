@@ -2,20 +2,25 @@
 # ShowPilot — Docker image publish workflow
 # ============================================================
 # Builds a multi-arch (amd64 + arm64) Docker image and publishes it to
-# GitHub Container Registry (ghcr.io) whenever a version tag is pushed.
+# GitHub Container Registry (ghcr.io) on two triggers:
 #
-# To cut a release and trigger this workflow:
+#   1. STABLE RELEASE — push a version tag like v0.18.5
+#         git tag v0.18.5 && git push --tags
+#      Produces these image tags on GHCR:
+#         - ghcr.io/showpilotfpp/showpilot:0.18.5
+#         - ghcr.io/showpilotfpp/showpilot:0.18
+#         - ghcr.io/showpilotfpp/showpilot:latest
+#      Users on `:latest` get the new version on next `docker compose pull`.
 #
-#     git tag v0.18.5
-#     git push --tags
+#   2. BETA — push to the beta branch
+#         git checkout beta && git push
+#      Produces:
+#         - ghcr.io/showpilotfpp/showpilot:beta
+#      Users on `:beta` get the new beta on next `docker compose pull`.
+#      `:latest` is NOT updated — production users keep their stable build.
 #
-# That produces three image tags on GHCR:
-#   - ghcr.io/showpilotfpp/showpilot:0.18.5
-#   - ghcr.io/showpilotfpp/showpilot:0.18
-#   - ghcr.io/showpilotfpp/showpilot:latest
-#
-# Users run `docker pull ghcr.io/showpilotfpp/showpilot:latest` and skip the
-# git clone + local build entirely.
+# The two channels are independent. Beta users opt in by pulling `:beta`;
+# everyone else stays on `:latest` and never sees beta builds.
 # ============================================================
 
 name: Build and publish Docker image
@@ -24,6 +29,8 @@ on:
   push:
     tags:
       - 'v*.*.*'
+    branches:
+      - beta
   # Allow manual triggering from the Actions UI for testing or re-publishing
   workflow_dispatch:
 
@@ -62,9 +69,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Generate Docker tags from the git tag. For tag `v0.18.5` this emits
-      # `0.18.5`, `0.18`, and `latest`. Users who pin to a specific version
-      # use the full tag; users who want auto-updates use `latest`.
+      # Generate Docker tags. The semver patterns only match on tag pushes
+      # (so `v0.18.5` becomes `0.18.5` + `0.18` + `latest`). The `ref` rule
+      # below tags the beta branch as `beta`, so a push to the beta branch
+      # produces `:beta` without affecting `:latest`.
       - name: Extract metadata for Docker
         id: meta
         uses: docker/metadata-action@v5
@@ -74,6 +82,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/beta' }}
 
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v5

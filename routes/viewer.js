@@ -461,8 +461,9 @@ router.get('/now-playing-audio', (req, res) => {
   });
 });
 
-// Audio proxy — fetches the file from FPP, streams it through. Supports HTTP
-// Range requests so the browser audio element can seek/resume properly.
+// Audio proxy — checks the local audio cache first (populated by the plugin
+// during sync). Falls back to proxying from FPP if not cached. Supports
+// HTTP Range requests so browsers can seek/resume.
 router.get('/audio-stream/:sequence', async (req, res) => {
   // Case-insensitive lookup in case viewer page or admin renamed the sequence
   // with different casing than what we have in DB.
@@ -475,6 +476,51 @@ router.get('/audio-stream/:sequence', async (req, res) => {
     return res.status(404).send('Audio not available for this sequence');
   }
 
+  // ============================================================
+  // CACHE-FIRST PATH (v0.19.0+)
+  // ============================================================
+  // If the plugin has uploaded this audio file via the audio-cache
+  // sync, serve it directly from local disk. This is the fast path:
+  // no FPP round trip, no SD-card thrash, scales to many concurrent
+  // viewers because OS page cache handles repeated reads natively.
+  //
+  // Express's res.sendFile() handles Range requests, content-type,
+  // ETags, etc. for free. Falls through to the proxy path below
+  // only if the cache lookup misses — preserves backward compat
+  // with installs that haven't upgraded their plugin yet.
+  try {
+    const audioCache = require('../lib/audio-cache');
+    const cachedPath = audioCache.getCachedPathForMediaName(seq.media_name);
+    if (cachedPath) {
+      // Aggressive caching for cellular listeners. Audio file bytes are
+      // immutable — same hash, same content. Cloudflare or other edge
+      // caches can serve this aggressively.
+      res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
+      // sendFile handles Range/304/Accept-Ranges automatically. Browser
+      // gets sample-precise seeking exactly as it would from FPP.
+      return res.sendFile(cachedPath, (err) => {
+        if (err && !res.headersSent) {
+          // Local file disappeared between lookup and send — extremely
+          // rare race condition. Return 502 rather than retry; viewer's
+          // audio scheduler will retry on the next sync cycle.
+          console.error('[audio-stream] cache file send failed:', err.message);
+          res.status(502).send('Cached audio file unavailable');
+        }
+      });
+    }
+  } catch (e) {
+    // Cache subsystem error — fall through to FPP proxy. This is the
+    // backstop that keeps audio working even if the cache breaks.
+    console.warn('[audio-stream] cache lookup failed, falling back to FPP proxy:', e.message);
+  }
+
+  // ============================================================
+  // FPP PROXY FALLBACK
+  // ============================================================
+  // No cache hit. Hit FPP directly. This is what every audio request
+  // did before v0.19.0; it stays as the fallback for fresh installs
+  // before the plugin has uploaded files, plugin downgrades, or any
+  // case where cache is empty.
   // Need FPP host from plugin status
   const cfg = getConfig();
   const fppHost = cfg.plugin_fpp_host;
