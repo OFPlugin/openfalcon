@@ -435,6 +435,27 @@ router.get('/now-playing-audio', (req, res) => {
   const startedAtMs = np.started_at ? new Date(np.started_at.replace(' ', 'T') + 'Z').getTime() : null;
   const elapsedSec = startedAtMs ? Math.max(0, (Date.now() - startedAtMs) / 1000) : 0;
 
+  // Look up the cached audio's hash and append it to the stream URL as a
+  // cache buster. Without this, the browser may serve stale bytes from
+  // its HTTP cache when the underlying file changes (e.g. the plugin
+  // re-syncs after we fix a format bug). The /api/audio-stream/<seq> URL
+  // itself doesn't change when bytes change — so we add ?v=<hash-prefix>.
+  // When the hash changes, the URL changes, browser fetches fresh.
+  //
+  // Falls back to no version param when the file isn't cached (FPP-proxy
+  // path) — there's no hash to anchor to. The route ignores unknown
+  // query params, so adding ?v=... is always safe.
+  let versionParam = '';
+  try {
+    const audioCache = require('../lib/audio-cache');
+    const cached = audioCache.getCachedFileForMediaName(seq.media_name);
+    if (cached && cached.hash) {
+      versionParam = '?v=' + cached.hash.slice(0, 8);
+    }
+  } catch (_) {
+    // Non-fatal — proceed without cache busting.
+  }
+
   res.json({
     playing: true,
     hasAudio: true,
@@ -452,9 +473,9 @@ router.get('/now-playing-audio', (req, res) => {
     // FPP's built-in /api/file/Music/<name> endpoint. Same-origin path always
     // works; the public URL is for cellular/external listeners hitting through
     // the public domain.
-    streamUrl: `/api/audio-stream/${encodeURIComponent(seq.name)}`,
+    streamUrl: `/api/audio-stream/${encodeURIComponent(seq.name)}${versionParam}`,
     publicStreamUrl: cfg.public_base_url
-      ? `${String(cfg.public_base_url).replace(/\/+$/, '')}/api/audio-stream/${encodeURIComponent(seq.name)}`
+      ? `${String(cfg.public_base_url).replace(/\/+$/, '')}/api/audio-stream/${encodeURIComponent(seq.name)}${versionParam}`
       : '',
     // Visual settings (snow, decoration, custom color) — always present
     ...visualConfig,

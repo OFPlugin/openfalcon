@@ -1292,7 +1292,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.19.4-beta</span><span class="app-beta-pill">Beta</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.19.5-beta</span><span class="app-beta-pill">Beta</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -3579,14 +3579,19 @@
       targetRow.parentElement.insertBefore(previewRow, targetRow.nextSibling);
       _activePreviewId = seqId;
 
-      // Wire the audio element. Use the sequence NAME (not id) because
       // /api/audio-stream/:sequence is keyed on the FPP sequence name —
       // same endpoint the viewers use. This means the preview tests the
       // exact same code path real users hit.
+      //
+      // Append ?t=<now> to force the browser to fetch fresh bytes every
+      // time the admin opens a preview. Admin previews are one-off
+      // diagnostics — there's no benefit to leveraging the browser's
+      // HTTP cache, and it actively HURTS to do so when we're trying to
+      // verify a recent file change worked.
       const audio = document.getElementById('seqPreviewAudio_' + seqId);
       const sourceEl = document.getElementById('seqPreviewSource_' + seqId);
       const errorEl = document.getElementById('seqPreviewError_' + seqId);
-      const streamUrl = '/api/audio-stream/' + encodeURIComponent(seq.name);
+      const streamUrl = '/api/audio-stream/' + encodeURIComponent(seq.name) + '?t=' + Date.now();
 
       audio.src = streamUrl;
       audio.addEventListener('error', function() {
