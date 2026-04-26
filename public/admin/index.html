@@ -1157,7 +1157,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">OpenFalcon <span class="app-version">v0.16.0</span></span>
+      <span class="app-brand">OpenFalcon <span class="app-version">v0.17.0</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1272,58 +1272,6 @@
           </div>
         </div>
 
-        <div class="card">
-          <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
-            <h2 style="margin: 0;">Visitor Stats</h2>
-            <div class="row" id="visitorRangeTabs" style="gap: 0; margin: 0; background: var(--bg-tertiary); border-radius: 6px; padding: 2px;">
-              <button class="of-vrange" data-range="today" onclick="setVisitorRange('today')">Today</button>
-              <button class="of-vrange" data-range="7d" onclick="setVisitorRange('7d')">7 days</button>
-              <button class="of-vrange active" data-range="30d" onclick="setVisitorRange('30d')">30 days</button>
-              <button class="of-vrange" data-range="season" onclick="setVisitorRange('season')">This season</button>
-              <button class="of-vrange" data-range="all" onclick="setVisitorRange('all')">All time</button>
-            </div>
-          </div>
-
-          <div class="visitor-summary-grid">
-            <div class="vsum">
-              <div class="vsum-label">Today</div>
-              <div class="vsum-row"><span class="vsum-dot" style="background:#22c55e;"></span><span class="vsum-key">Unique</span><span class="vsum-val" id="vsumTodayU">—</span></div>
-              <div class="vsum-row"><span class="vsum-dot" style="background:#3b82f6;"></span><span class="vsum-key">Visits</span><span class="vsum-val" id="vsumTodayV">—</span></div>
-              <div class="vsum-row"><span class="vsum-dot" style="background:#f59e0b;"></span><span class="vsum-key">Requests</span><span class="vsum-val" id="vsumTodayR">—</span></div>
-            </div>
-            <div class="vsum">
-              <div class="vsum-label">Range</div>
-              <div class="vsum-row"><span class="vsum-dot" style="background:#22c55e;"></span><span class="vsum-key">Unique</span><span class="vsum-val" id="vsumRangeU">—</span></div>
-              <div class="vsum-row"><span class="vsum-dot" style="background:#3b82f6;"></span><span class="vsum-key">Visits</span><span class="vsum-val" id="vsumRangeV">—</span></div>
-              <div class="vsum-row"><span class="vsum-dot" style="background:#f59e0b;"></span><span class="vsum-key">Requests</span><span class="vsum-val" id="vsumRangeR">—</span></div>
-            </div>
-            <div class="vsum">
-              <div class="vsum-label">All time</div>
-              <div class="vsum-row"><span class="vsum-dot" style="background:#22c55e;"></span><span class="vsum-key">Unique</span><span class="vsum-val" id="vsumAllU">—</span></div>
-              <div class="vsum-row"><span class="vsum-dot" style="background:#3b82f6;"></span><span class="vsum-key">Visits</span><span class="vsum-val" id="vsumAllV">—</span></div>
-              <div class="vsum-row"><span class="vsum-dot" style="background:#f59e0b;"></span><span class="vsum-key">Requests</span><span class="vsum-val" id="vsumAllR">—</span></div>
-            </div>
-          </div>
-
-          <div class="visitor-charts-grid">
-            <div class="vchart-wrap">
-              <div class="vchart-title"><span class="vchart-dot" style="background:#22c55e;"></span>Unique Visitors</div>
-              <div class="vchart-canvas-wrap"><canvas id="chartUnique"></canvas></div>
-            </div>
-            <div class="vchart-wrap">
-              <div class="vchart-title"><span class="vchart-dot" style="background:#3b82f6;"></span>Total Visits</div>
-              <div class="vchart-canvas-wrap"><canvas id="chartVisits"></canvas></div>
-            </div>
-            <div class="vchart-wrap">
-              <div class="vchart-title"><span class="vchart-dot" style="background:#f59e0b;"></span>Total Requests</div>
-              <div class="vchart-canvas-wrap"><canvas id="chartRequests"></canvas></div>
-            </div>
-          </div>
-
-          <p class="muted" style="font-size: 0.75rem; margin: 0.75rem 0 0;">
-            Visitor stats use a session cookie (<code>of_vid</code>) and IP for analytics. Data stays on your server. Bots are filtered before logging.
-          </p>
-        </div>
 
         <div class="card">
           <h2>Top Sequences (all time)</h2>
@@ -1453,6 +1401,62 @@
             <button class="secondary" onclick="setStatsRange('week')">7 days</button>
             <button class="secondary" onclick="setStatsRange('month')">30 days</button>
             <button class="secondary" onclick="setStatsRange('all')">All time</button>
+          </div>
+
+          <!-- Visitor analytics — moved from Dashboard. Range tabs control the
+               three-up charts and KPI summary independently of the per-sequence
+               date range above (different data sources, different time semantics). -->
+          <div style="border-top: 1px solid var(--border); padding-top: 1rem; margin-top: 0.5rem;">
+            <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
+              <h3 style="margin: 0; font-size: 1.05rem;">Visitor Analytics</h3>
+              <div class="row" id="visitorRangeTabs" style="gap: 0; margin: 0; background: var(--bg-tertiary); border-radius: 6px; padding: 2px;">
+                <button class="of-vrange" data-range="today" onclick="setVisitorRange('today')">Today</button>
+                <button class="of-vrange" data-range="7d" onclick="setVisitorRange('7d')">7 days</button>
+                <button class="of-vrange active" data-range="30d" onclick="setVisitorRange('30d')">30 days</button>
+                <button class="of-vrange" data-range="season" onclick="setVisitorRange('season')">This season</button>
+                <button class="of-vrange" data-range="all" onclick="setVisitorRange('all')">All time</button>
+              </div>
+            </div>
+
+            <div class="visitor-summary-grid">
+              <div class="vsum">
+                <div class="vsum-label">Today</div>
+                <div class="vsum-row"><span class="vsum-dot" style="background:#22c55e;"></span><span class="vsum-key">Unique</span><span class="vsum-val" id="vsumTodayU">—</span></div>
+                <div class="vsum-row"><span class="vsum-dot" style="background:#3b82f6;"></span><span class="vsum-key">Visits</span><span class="vsum-val" id="vsumTodayV">—</span></div>
+                <div class="vsum-row"><span class="vsum-dot" style="background:#f59e0b;"></span><span class="vsum-key">Requests</span><span class="vsum-val" id="vsumTodayR">—</span></div>
+              </div>
+              <div class="vsum">
+                <div class="vsum-label">Range</div>
+                <div class="vsum-row"><span class="vsum-dot" style="background:#22c55e;"></span><span class="vsum-key">Unique</span><span class="vsum-val" id="vsumRangeU">—</span></div>
+                <div class="vsum-row"><span class="vsum-dot" style="background:#3b82f6;"></span><span class="vsum-key">Visits</span><span class="vsum-val" id="vsumRangeV">—</span></div>
+                <div class="vsum-row"><span class="vsum-dot" style="background:#f59e0b;"></span><span class="vsum-key">Requests</span><span class="vsum-val" id="vsumRangeR">—</span></div>
+              </div>
+              <div class="vsum">
+                <div class="vsum-label">All time</div>
+                <div class="vsum-row"><span class="vsum-dot" style="background:#22c55e;"></span><span class="vsum-key">Unique</span><span class="vsum-val" id="vsumAllU">—</span></div>
+                <div class="vsum-row"><span class="vsum-dot" style="background:#3b82f6;"></span><span class="vsum-key">Visits</span><span class="vsum-val" id="vsumAllV">—</span></div>
+                <div class="vsum-row"><span class="vsum-dot" style="background:#f59e0b;"></span><span class="vsum-key">Requests</span><span class="vsum-val" id="vsumAllR">—</span></div>
+              </div>
+            </div>
+
+            <div class="visitor-charts-grid">
+              <div class="vchart-wrap">
+                <div class="vchart-title"><span class="vchart-dot" style="background:#22c55e;"></span>Unique Visitors</div>
+                <div class="vchart-canvas-wrap"><canvas id="chartUnique"></canvas></div>
+              </div>
+              <div class="vchart-wrap">
+                <div class="vchart-title"><span class="vchart-dot" style="background:#3b82f6;"></span>Total Visits</div>
+                <div class="vchart-canvas-wrap"><canvas id="chartVisits"></canvas></div>
+              </div>
+              <div class="vchart-wrap">
+                <div class="vchart-title"><span class="vchart-dot" style="background:#f59e0b;"></span>Total Requests</div>
+                <div class="vchart-canvas-wrap"><canvas id="chartRequests"></canvas></div>
+              </div>
+            </div>
+
+            <p class="muted" style="font-size: 0.75rem; margin: 0.75rem 0 1rem;">
+              Visitor stats use a session cookie (<code>of_vid</code>) and an anonymized IP (last octet truncated) for analytics. Data stays on your server. Bots are filtered before logging.
+            </p>
           </div>
 
           <div style="overflow-x: auto;">
@@ -2148,10 +2152,9 @@
       }
       // Refresh data when switching to these tabs
       if (name === 'queue') loadQueueTab();
-      if (name === 'stats') loadStatsTab();
+      if (name === 'stats') { loadStatsTab(); loadVisitorStats(); }
       if (name === 'sequences') loadSnapshots();
       if (name === 'users') loadUsers();
-      if (name === 'dashboard') loadVisitorStats();
     }
 
     function copyShowToken() {
@@ -3558,12 +3561,11 @@
     // 5-second updates and the queries are heavier than /stats).
     function _maybeLoadVisitorStats() {
       if (document.getElementById('appView').classList.contains('hidden')) return;
-      const dashPane = document.querySelector('.tab-pane[data-pane="dashboard"]');
-      if (!dashPane || !dashPane.classList.contains('active')) return;
+      const statsPane = document.querySelector('.tab-pane[data-pane="stats"]');
+      if (!statsPane || !statsPane.classList.contains('active')) return;
       loadVisitorStats();
     }
-    // Fire on first dashboard view (post-auth) and every 30s while it's open
-    setTimeout(_maybeLoadVisitorStats, 600);
+    // Refresh visitor stats every 30s while the Stats tab is open
     setInterval(_maybeLoadVisitorStats, 30000);
 
     // Also poll config every 5s so the mode dropdown + badge stay in sync with
@@ -4565,6 +4567,95 @@
         styles: { fontSize: 8 },
         headStyles: { fillColor: [239, 68, 68] },
       });
+
+      // ===== Visitor Analytics page =====
+      // Append the three visitor charts + KPI summary on a fresh page so they
+      // get full-width treatment. Charts come from the Chart.js instances
+      // currently rendered on the Stats tab — if they haven't been built yet
+      // (e.g. user clicked Export before scrolling to the charts), we skip.
+      const haveCharts = _visitorCharts && (_visitorCharts.unique || _visitorCharts.visits || _visitorCharts.requests);
+      if (haveCharts) {
+        doc.addPage('landscape');
+        const pageW = doc.internal.pageSize.getWidth();
+        const margin = 14;
+
+        // Header
+        doc.setFontSize(16);
+        doc.setTextColor(0);
+        doc.text('OpenFalcon — Visitor Analytics', margin, 15);
+
+        // Range label — pull from active range tab
+        const rangeLabels = { today: 'Today', '7d': 'Last 7 days', '30d': 'Last 30 days', season: 'This season', all: 'All time' };
+        const vrange = rangeLabels[_visitorRange] || _visitorRange;
+        doc.setFontSize(10);
+        doc.setTextColor(100);
+        doc.text(`Range: ${vrange}  ·  Generated: ${dateStr}`, margin, 22);
+
+        // KPI summary table — three columns: Today / Range / All time
+        const sumKpi = (id) => {
+          const el = document.getElementById(id);
+          return el ? el.textContent : '—';
+        };
+        doc.autoTable({
+          startY: 28,
+          head: [['', 'Unique Visitors', 'Total Visits', 'Total Requests']],
+          body: [
+            ['Today', sumKpi('vsumTodayU'), sumKpi('vsumTodayV'), sumKpi('vsumTodayR')],
+            [`Range (${vrange})`, sumKpi('vsumRangeU'), sumKpi('vsumRangeV'), sumKpi('vsumRangeR')],
+            ['All time', sumKpi('vsumAllU'), sumKpi('vsumAllV'), sumKpi('vsumAllR')],
+          ],
+          theme: 'striped',
+          styles: { fontSize: 9 },
+          headStyles: { fillColor: [59, 130, 246] },
+          columnStyles: {
+            0: { fontStyle: 'bold', cellWidth: 50 },
+            1: { halign: 'right' },
+            2: { halign: 'right' },
+            3: { halign: 'right' },
+          },
+        });
+
+        // Three charts side-by-side. Chart.js's toBase64Image() returns a PNG
+        // sized to the live canvas — we just embed it at a calculated width so
+        // all three fit across the page with margins between.
+        const chartsTopY = doc.lastAutoTable.finalY + 10;
+        const gap = 6;
+        const chartW = (pageW - margin * 2 - gap * 2) / 3;
+        const chartH = 70;
+        const charts = [
+          { key: 'unique', label: 'Unique Visitors' },
+          { key: 'visits', label: 'Total Visits' },
+          { key: 'requests', label: 'Total Requests' },
+        ];
+        charts.forEach((c, idx) => {
+          const x = margin + idx * (chartW + gap);
+          // Title above chart
+          doc.setFontSize(10);
+          doc.setTextColor(60);
+          doc.text(c.label, x, chartsTopY);
+          const inst = _visitorCharts[c.key];
+          if (inst) {
+            try {
+              const img = inst.toBase64Image('image/png', 1);
+              // PNG addImage: x, y, w, h
+              doc.addImage(img, 'PNG', x, chartsTopY + 3, chartW, chartH);
+            } catch (e) {
+              doc.setFontSize(9);
+              doc.setTextColor(150);
+              doc.text('(chart unavailable)', x, chartsTopY + 20);
+            }
+          }
+        });
+
+        // Footer note about the analytics
+        doc.setFontSize(8);
+        doc.setTextColor(120);
+        doc.text(
+          'Visitor stats use a session cookie (of_vid) and an anonymized IP (last octet truncated). Bots filtered before logging.',
+          margin,
+          chartsTopY + chartH + 12
+        );
+      }
 
       doc.save(`openfalcon-stats-${new Date().toISOString().slice(0,10)}.pdf`);
     }
