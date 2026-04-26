@@ -516,128 +516,133 @@ router.get('/plugin-status', requireAdmin, (req, res) => {
 // and silently block the request — even on first-party admin pages. The
 // data is what matters; the URL just needs to not match common blocklists.
 router.get('/stats/audience', requireAdmin, (req, res) => {
-  const range = String(req.query.range || '7d');
+  try {
+    const range = String(req.query.range || '7d');
 
-  // Map range → SQL window + bucket strftime format.
-  // SQLite strftime('%Y-%m-%d %H:00:00', ...) gives hourly buckets;
-  // strftime('%Y-%m-%d', ...) gives daily; strftime('%Y-%m', ...) gives monthly.
-  let sinceClause = '';
-  let bucketFmt = '%Y-%m-%d';
-  let bucketStep = 'day';
+    // Map range → SQL window + bucket strftime format.
+    // SQLite strftime('%Y-%m-%d %H:00:00', ...) gives hourly buckets;
+    // strftime('%Y-%m-%d', ...) gives daily; strftime('%Y-%m', ...) gives monthly.
+    let sinceClause = '';
+    let bucketFmt = '%Y-%m-%d';
+    let bucketStep = 'day';
 
-  if (range === 'today') {
-    sinceClause = `visited_at >= date('now', 'localtime') AND visited_at < date('now', 'localtime', '+1 day')`;
-    bucketFmt = '%Y-%m-%d %H:00:00';
-    bucketStep = 'hour';
-  } else if (range === '7d') {
-    sinceClause = `visited_at >= date('now', '-7 days')`;
-    bucketFmt = '%Y-%m-%d';
-    bucketStep = 'day';
-  } else if (range === '30d') {
-    sinceClause = `visited_at >= date('now', '-30 days')`;
-    bucketFmt = '%Y-%m-%d';
-    bucketStep = 'day';
-  } else if (range === 'season') {
-    // "This season" = most recent fall (Oct 1 of current year if past Oct 1,
-    // else Oct 1 of last year). Captures Halloween + Christmas in one window.
-    const now = new Date();
-    const seasonStart = new Date(now.getFullYear(), 9, 1); // month index 9 = October
-    if (now < seasonStart) seasonStart.setFullYear(seasonStart.getFullYear() - 1);
-    const iso = seasonStart.toISOString().slice(0, 10);
-    sinceClause = `visited_at >= '${iso}'`;
-    bucketFmt = '%Y-%m-%d';
-    bucketStep = 'day';
-  } else if (range === 'all') {
-    sinceClause = `1=1`;
-    bucketFmt = '%Y-%m';
-    bucketStep = 'month';
-  } else {
-    return res.status(400).json({ error: 'Invalid range' });
+    if (range === 'today') {
+      sinceClause = `visited_at >= date('now', 'localtime') AND visited_at < date('now', 'localtime', '+1 day')`;
+      bucketFmt = '%Y-%m-%d %H:00:00';
+      bucketStep = 'hour';
+    } else if (range === '7d') {
+      sinceClause = `visited_at >= date('now', '-7 days')`;
+      bucketFmt = '%Y-%m-%d';
+      bucketStep = 'day';
+    } else if (range === '30d') {
+      sinceClause = `visited_at >= date('now', '-30 days')`;
+      bucketFmt = '%Y-%m-%d';
+      bucketStep = 'day';
+    } else if (range === 'season') {
+      // "This season" = most recent fall (Oct 1 of current year if past Oct 1,
+      // else Oct 1 of last year). Captures Halloween + Christmas in one window.
+      const now = new Date();
+      const seasonStart = new Date(now.getFullYear(), 9, 1); // month index 9 = October
+      if (now < seasonStart) seasonStart.setFullYear(seasonStart.getFullYear() - 1);
+      const iso = seasonStart.toISOString().slice(0, 10);
+      sinceClause = `visited_at >= '${iso}'`;
+      bucketFmt = '%Y-%m-%d';
+      bucketStep = 'day';
+    } else if (range === 'all') {
+      sinceClause = `1=1`;
+      bucketFmt = '%Y-%m';
+      bucketStep = 'month';
+    } else {
+      return res.status(400).json({ error: 'Invalid range' });
+    }
+
+    // For requests, the source-of-truth is jukebox_queue (every request lands
+    // there with requested_at). Voting submissions go to votes (with voted_at),
+    // so we union both for "total requests" — anything a viewer actively chose.
+    const requestsTable = `(
+      SELECT requested_at AS at FROM jukebox_queue
+      UNION ALL
+      SELECT voted_at AS at FROM votes
+    )`;
+
+    // Replace visited_at in sinceClause for the requests query
+    const requestsSinceClause = sinceClause.replace(/visited_at/g, 'at');
+
+    const visitsBuckets = db.prepare(`
+      SELECT strftime('${bucketFmt}', visited_at, 'localtime') AS bucket,
+             COUNT(*) AS visits,
+             COUNT(DISTINCT visitor_id) AS uniques
+      FROM viewer_visits
+      WHERE ${sinceClause}
+      GROUP BY bucket
+      ORDER BY bucket ASC
+    `).all();
+
+    const requestsBuckets = db.prepare(`
+      SELECT strftime('${bucketFmt}', at, 'localtime') AS bucket,
+             COUNT(*) AS requests
+      FROM ${requestsTable}
+      WHERE ${requestsSinceClause}
+      GROUP BY bucket
+      ORDER BY bucket ASC
+    `).all();
+
+    // Merge into a unified bucket-keyed map so frontend has aligned x-axis values
+    const bucketMap = new Map();
+    for (const row of visitsBuckets) {
+      bucketMap.set(row.bucket, { bucket: row.bucket, uniques: row.uniques, visits: row.visits, requests: 0 });
+    }
+    for (const row of requestsBuckets) {
+      const existing = bucketMap.get(row.bucket);
+      if (existing) existing.requests = row.requests;
+      else bucketMap.set(row.bucket, { bucket: row.bucket, uniques: 0, visits: 0, requests: row.requests });
+    }
+    const series = Array.from(bucketMap.values()).sort((a, b) => a.bucket.localeCompare(b.bucket));
+
+    // Summary KPIs (range-bound + today + all-time)
+    const todayStats = db.prepare(`
+      SELECT COUNT(*) AS visits, COUNT(DISTINCT visitor_id) AS uniques
+      FROM viewer_visits
+      WHERE visited_at >= date('now', 'localtime')
+    `).get();
+    const todayRequests = db.prepare(`
+      SELECT COUNT(*) AS n FROM ${requestsTable}
+      WHERE at >= date('now', 'localtime')
+    `).get().n;
+
+    const allStats = db.prepare(`
+      SELECT COUNT(*) AS visits, COUNT(DISTINCT visitor_id) AS uniques
+      FROM viewer_visits
+    `).get();
+    const allRequests = db.prepare(`
+      SELECT COUNT(*) AS n FROM ${requestsTable}
+    `).get().n;
+
+    // Range-bound summary (matches the chart window)
+    const rangeStats = db.prepare(`
+      SELECT COUNT(*) AS visits, COUNT(DISTINCT visitor_id) AS uniques
+      FROM viewer_visits
+      WHERE ${sinceClause}
+    `).get();
+    const rangeRequests = db.prepare(`
+      SELECT COUNT(*) AS n FROM ${requestsTable}
+      WHERE ${requestsSinceClause}
+    `).get().n;
+
+    res.json({
+      range,
+      bucketStep,
+      series,
+      summary: {
+        today: { uniques: todayStats.uniques, visits: todayStats.visits, requests: todayRequests },
+        range: { uniques: rangeStats.uniques, visits: rangeStats.visits, requests: rangeRequests },
+        allTime: { uniques: allStats.uniques, visits: allStats.visits, requests: allRequests },
+      },
+    });
+  } catch (err) {
+    console.error('[stats/audience] failed:', err.message, err.stack);
+    res.status(500).json({ error: err.message });
   }
-
-  // For requests, the source-of-truth is jukebox_queue (every request lands
-  // there with requested_at). Voting submissions go to votes (with cast_at),
-  // so we union both for "total requests" — anything a viewer actively chose.
-  const requestsTable = `(
-    SELECT requested_at AS at FROM jukebox_queue
-    UNION ALL
-    SELECT cast_at AS at FROM votes
-  )`;
-
-  // Replace visited_at in sinceClause for the requests query
-  const requestsSinceClause = sinceClause.replace(/visited_at/g, 'at');
-
-  const visitsBuckets = db.prepare(`
-    SELECT strftime('${bucketFmt}', visited_at, 'localtime') AS bucket,
-           COUNT(*) AS visits,
-           COUNT(DISTINCT visitor_id) AS uniques
-    FROM viewer_visits
-    WHERE ${sinceClause}
-    GROUP BY bucket
-    ORDER BY bucket ASC
-  `).all();
-
-  const requestsBuckets = db.prepare(`
-    SELECT strftime('${bucketFmt}', at, 'localtime') AS bucket,
-           COUNT(*) AS requests
-    FROM ${requestsTable}
-    WHERE ${requestsSinceClause}
-    GROUP BY bucket
-    ORDER BY bucket ASC
-  `).all();
-
-  // Merge into a unified bucket-keyed map so frontend has aligned x-axis values
-  const bucketMap = new Map();
-  for (const row of visitsBuckets) {
-    bucketMap.set(row.bucket, { bucket: row.bucket, uniques: row.uniques, visits: row.visits, requests: 0 });
-  }
-  for (const row of requestsBuckets) {
-    const existing = bucketMap.get(row.bucket);
-    if (existing) existing.requests = row.requests;
-    else bucketMap.set(row.bucket, { bucket: row.bucket, uniques: 0, visits: 0, requests: row.requests });
-  }
-  const series = Array.from(bucketMap.values()).sort((a, b) => a.bucket.localeCompare(b.bucket));
-
-  // Summary KPIs (range-bound + today + all-time)
-  const todayStats = db.prepare(`
-    SELECT COUNT(*) AS visits, COUNT(DISTINCT visitor_id) AS uniques
-    FROM viewer_visits
-    WHERE visited_at >= date('now', 'localtime')
-  `).get();
-  const todayRequests = db.prepare(`
-    SELECT COUNT(*) AS n FROM ${requestsTable}
-    WHERE at >= date('now', 'localtime')
-  `).get().n;
-
-  const allStats = db.prepare(`
-    SELECT COUNT(*) AS visits, COUNT(DISTINCT visitor_id) AS uniques
-    FROM viewer_visits
-  `).get();
-  const allRequests = db.prepare(`
-    SELECT COUNT(*) AS n FROM ${requestsTable}
-  `).get().n;
-
-  // Range-bound summary (matches the chart window)
-  const rangeStats = db.prepare(`
-    SELECT COUNT(*) AS visits, COUNT(DISTINCT visitor_id) AS uniques
-    FROM viewer_visits
-    WHERE ${sinceClause}
-  `).get();
-  const rangeRequests = db.prepare(`
-    SELECT COUNT(*) AS n FROM ${requestsTable}
-    WHERE ${requestsSinceClause}
-  `).get().n;
-
-  res.json({
-    range,
-    bucketStep,
-    series,
-    summary: {
-      today: { uniques: todayStats.uniques, visits: todayStats.visits, requests: todayRequests },
-      range: { uniques: rangeStats.uniques, visits: rangeStats.visits, requests: rangeRequests },
-      allTime: { uniques: allStats.uniques, visits: allStats.visits, requests: allRequests },
-    },
-  });
 });
 
 // Show the current show token (for pasting into FPP plugin)
