@@ -1275,7 +1275,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.18.10</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.18.11</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1446,7 +1446,7 @@
                   <th style="width: 70px;">Vote</th>
                   <th style="width: 70px;">Jukebox</th>
                   <th style="width: 60px;">PSA</th>
-                  <th style="width: 130px;"></th>
+                  <th style="width: 200px;"></th>
                 </tr>
               </thead>
               <tbody id="sequencesBody"></tbody>
@@ -2201,6 +2201,36 @@
       <div class="row" style="justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem;">
         <button class="secondary" id="cpw_cancel" onclick="hideChangePasswordModal()">Cancel</button>
         <button onclick="submitChangePassword()">Change Password</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       MODAL: Track Search (per-row 🔍 Search button)
+       ============================================================
+       Auto-runs a search on open using the current display name as the
+       initial query. User can edit + re-search. Clicking a result writes
+       the title, artist, AND cover to the sequence atomically. -->
+  <div id="trackSearchModal" class="of-modal hidden">
+    <div class="of-modal-card" style="max-width: 720px; width: calc(100% - 2rem);">
+      <h3 style="margin-top: 0;">Search for track</h3>
+      <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+        Try variations if the first results don't match — adding the artist often helps.
+      </p>
+      <div class="row" style="gap: 0.5rem; align-items: stretch; margin-bottom: 0.5rem;">
+        <input type="text" id="tsm_query" placeholder="Search title and/or artist…" style="flex: 1; margin: 0;"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();runTrackSearch();}" />
+        <button onclick="runTrackSearch()" style="margin: 0;">Search</button>
+      </div>
+      <p class="muted" id="tsm_status" style="font-size: 0.8rem; margin: 0.25rem 0 0; min-height: 1rem;"></p>
+
+      <!-- Results scroll inside the modal so very long lists don't blow up the page -->
+      <div id="tsm_results" style="margin-top: 0.5rem; max-height: 50vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px;">
+        <p class="muted" style="padding: 1rem; text-align: center; margin: 0;">Searching…</p>
+      </div>
+
+      <div class="row" style="justify-content: flex-end; gap: 0.5rem; margin-top: 0.75rem;">
+        <button class="secondary" onclick="closeTrackSearchModal()">Close</button>
       </div>
     </div>
   </div>
@@ -3224,8 +3254,8 @@
         <td><label class="toggle" style="transform:scale(0.7);"><input type="checkbox" ${seq.votable ? 'checked' : ''} onchange="updateSeqField(${seq.id}, 'votable', this.checked ? 1 : 0)" /><span class="slider"></span></label></td>
         <td><label class="toggle" style="transform:scale(0.7);"><input type="checkbox" ${seq.jukeboxable ? 'checked' : ''} onchange="updateSeqField(${seq.id}, 'jukeboxable', this.checked ? 1 : 0)" /><span class="slider"></span></label></td>
         <td><label class="toggle" style="transform:scale(0.7);"><input type="checkbox" ${seq.is_psa ? 'checked' : ''} onchange="updateSeqField(${seq.id}, 'is_psa', this.checked ? 1 : 0)" /><span class="slider"></span></label></td>
-        <td>
-          <button class="secondary" style="padding: 0.3rem 0.5rem; font-size: 0.78rem; white-space: nowrap;" onclick="scrapeOneMetadata(${seq.id}, this)" title="Look up clean title + artist + cover from iTunes">🪄 Re-scrape</button>
+        <td style="white-space: nowrap;">
+          <button class="secondary" onclick="openTrackSearchModal(${seq.id})" title="Search iTunes / MusicBrainz for the right title, artist, and cover" style="margin-right: 0.4rem;">🔍 Search</button>
           <button class="danger" onclick="delSeq(${seq.id})">Delete</button>
         </td>
       `;
@@ -3547,6 +3577,139 @@
       if (!await showConfirm('Delete this sequence?', { danger: true, okLabel: 'Delete' })) return;
       await api('/sequences/' + id, { method: 'DELETE' });
       loadSequences();
+    }
+
+    // ============================================================
+    // Track search modal (per-row 🔍 Search button)
+    // ============================================================
+    // Lifecycle:
+    //   openTrackSearchModal(id)  — show modal, pre-fill query, auto-search
+    //   runTrackSearch()          — re-issue search from the input value
+    //   applyTrackResult(r)       — POST chosen result, close modal, refresh
+    //   closeTrackSearchModal()   — hide modal
+    let _tsmCurrentSeqId = null;
+    let _tsmLastResults = [];
+    let _tsmInflight = 0;  // request token to avoid stale results painting
+
+    async function openTrackSearchModal(seqId) {
+      _tsmCurrentSeqId = seqId;
+      const seq = sequencesCache.find(s => s.id === seqId);
+      const seed = seq
+        // Prefer a "title artist" combo when both exist — gives iTunes the
+        // best shot at finding the right match for things like "Thriller
+        // Michael Jackson" rather than just "Thriller" (lots of false hits).
+        ? [seq.display_name, seq.artist].filter(Boolean).join(' ').trim()
+        : '';
+      document.getElementById('tsm_query').value = seed;
+      document.getElementById('tsm_status').textContent = '';
+      document.getElementById('trackSearchModal').classList.remove('hidden');
+      // Focus the input on next tick so the modal animation completes first
+      setTimeout(() => document.getElementById('tsm_query').focus(), 30);
+      runTrackSearch();
+    }
+
+    function closeTrackSearchModal() {
+      document.getElementById('trackSearchModal').classList.add('hidden');
+      _tsmCurrentSeqId = null;
+      _tsmLastResults = [];
+    }
+
+    async function runTrackSearch() {
+      const q = document.getElementById('tsm_query').value.trim();
+      const resultsEl = document.getElementById('tsm_results');
+      const statusEl = document.getElementById('tsm_status');
+      if (!q) {
+        resultsEl.innerHTML = '<p class="muted" style="padding: 1rem; text-align: center; margin: 0;">Type a query and press Enter or click Search.</p>';
+        statusEl.textContent = '';
+        return;
+      }
+      // Race-guard: if the user types and re-searches quickly, only the
+      // most recent search should paint into the results pane.
+      const myToken = ++_tsmInflight;
+      resultsEl.innerHTML = '<p class="muted" style="padding: 1rem; text-align: center; margin: 0;">Searching…</p>';
+      statusEl.textContent = '';
+      try {
+        const r = await api('/track-search?q=' + encodeURIComponent(q));
+        if (myToken !== _tsmInflight) return;  // stale, drop
+        if (!r.ok) {
+          resultsEl.innerHTML = `<p class="muted" style="padding: 1rem; text-align: center; margin: 0; color: var(--status-danger);">${escapeHtml(r.data?.error || 'Search failed')}</p>`;
+          return;
+        }
+        _tsmLastResults = r.data.results || [];
+        if (_tsmLastResults.length === 0) {
+          resultsEl.innerHTML = '<p class="muted" style="padding: 1rem; text-align: center; margin: 0;">No results. Try a different query — adding or removing the artist often changes things.</p>';
+          return;
+        }
+        // Render result rows. Source is shown as a small badge so users can
+        // tell "this came from MusicBrainz, that came from iTunes" — useful
+        // because the two services have very different recall patterns and
+        // sometimes one has the right match the other missed.
+        resultsEl.innerHTML = _tsmLastResults.map((r, idx) => `
+          <div class="tsm-result" data-idx="${idx}" style="display: flex; gap: 0.75rem; padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border); cursor: pointer; align-items: center;">
+            <img src="${escapeAttr(r.thumbUrl || '')}" loading="lazy"
+                 style="width: 56px; height: 56px; object-fit: cover; border-radius: 4px; background: var(--bg-input); flex-shrink: 0;"
+                 onerror="this.style.visibility='hidden';" />
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(r.title || '(untitled)')}</div>
+              <div style="font-size: 0.85rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(r.artist || '—')}${r.album ? ' • ' + escapeHtml(r.album) : ''}</div>
+            </div>
+            <span style="font-size: 0.7rem; color: var(--text-muted); padding: 0.15rem 0.4rem; border: 1px solid var(--border); border-radius: 3px; text-transform: uppercase;">${escapeHtml(r.source)}</span>
+          </div>
+        `).join('');
+        // Click handlers — delegated by index into _tsmLastResults so we
+        // don't have to escape the entire result object into an attribute.
+        resultsEl.querySelectorAll('.tsm-result').forEach(el => {
+          el.addEventListener('click', () => {
+            const idx = Number(el.dataset.idx);
+            const result = _tsmLastResults[idx];
+            if (result) applyTrackResult(result);
+          });
+          el.addEventListener('mouseenter', () => el.style.background = 'var(--bg-tertiary)');
+          el.addEventListener('mouseleave', () => el.style.background = '');
+        });
+        statusEl.textContent = `${_tsmLastResults.length} result${_tsmLastResults.length === 1 ? '' : 's'}.`;
+      } catch (err) {
+        if (myToken !== _tsmInflight) return;
+        resultsEl.innerHTML = `<p class="muted" style="padding: 1rem; text-align: center; margin: 0; color: var(--status-danger);">Search error: ${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    async function applyTrackResult(result) {
+      if (_tsmCurrentSeqId === null) return;
+      const seqId = _tsmCurrentSeqId;
+      // Quick optimistic UI feedback — disable click events while applying.
+      const resultsEl = document.getElementById('tsm_results');
+      resultsEl.style.pointerEvents = 'none';
+      resultsEl.style.opacity = '0.6';
+      try {
+        const r = await api(`/sequences/${seqId}/apply-search-result`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: result.title,
+            artist: result.artist,
+            coverUrl: result.coverUrl,
+          }),
+        });
+        if (!r.ok) {
+          showAlert(r.data?.error || 'Failed to apply result.');
+          resultsEl.style.pointerEvents = '';
+          resultsEl.style.opacity = '';
+          return;
+        }
+        // Cover may have failed silently on the server side (e.g. 404 from
+        // Cover Art Archive) but the title/artist still updated. Mention it
+        // so the user knows to use the cover-only picker if they want art.
+        if (!r.data.coverApplied && result.coverUrl) {
+          showAlert('Title and artist updated, but the cover image could not be downloaded.\n\nThe cover URL may be unavailable. You can try a different result, or use the cover picker on the artwork thumbnail.');
+        }
+        closeTrackSearchModal();
+        loadSequences();
+      } catch (err) {
+        showAlert('Apply failed: ' + err.message);
+        resultsEl.style.pointerEvents = '';
+        resultsEl.style.opacity = '';
+      }
     }
 
     // ============================================================

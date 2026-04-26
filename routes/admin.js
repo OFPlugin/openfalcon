@@ -935,6 +935,71 @@ router.get('/cover-search', requireAdmin, async (req, res) => {
   }
 });
 
+// Manual TRACK search — used by the per-row search modal in the Sequences
+// tab. Different from /cover-search above (which takes artist+title and is
+// used for the cover-only picker): this takes a single free-form query
+// string and returns candidates with title, artist, AND cover. The user
+// chooses one and the frontend POSTs to /sequences/:id/apply-search-result
+// to write all three fields atomically.
+router.get('/track-search', requireAdmin, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.status(400).json({ error: 'q required' });
+  try {
+    const { searchTracks } = require('../lib/cover-art');
+    const results = await searchTracks(q);
+    res.json({ results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Apply a chosen search result to a sequence — atomic update of
+// display_name + artist + cover. Frontend sends back the title/artist
+// strings AND the coverUrl (the high-res variant from the search result),
+// because the search result list is held in the browser and these are
+// trivially small to round-trip.
+router.post('/sequences/:id/apply-search-result', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const seq = db.prepare(`SELECT id FROM sequences WHERE id = ?`).get(id);
+  if (!seq) return res.status(404).json({ error: 'Sequence not found' });
+  const { title, artist, coverUrl } = req.body || {};
+  if (!title) return res.status(400).json({ error: 'title required' });
+
+  // Pull the cover file first; if it fails we don't want to leave the row
+  // half-updated (new title/artist but stale cover). We're tolerant of
+  // missing cover URLs — those just don't update the image.
+  let localCoverPath = null;
+  if (coverUrl) {
+    try {
+      const { downloadCover } = require('../lib/cover-art');
+      localCoverPath = await downloadCover(coverUrl, id);
+    } catch (err) {
+      // Don't fail the whole apply over a cover problem — surface it but
+      // still write the title/artist updates the user explicitly chose.
+      console.warn(`[apply-search-result] cover download failed for seq ${id}:`, err.message);
+    }
+  }
+
+  const updates = ['display_name = ?', 'artist = ?'];
+  const params = [String(title).trim(), String(artist || '').trim()];
+  if (localCoverPath) {
+    updates.push('image_url = ?');
+    params.push(localCoverPath);
+  }
+  params.push(id);
+  db.prepare(`UPDATE sequences SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+
+  const io = req.app.get('io');
+  if (io) io.emit('sequencesReordered');
+
+  const { bustCoverUrl } = require('../lib/cover-art');
+  res.json({
+    ok: true,
+    image_url: localCoverPath ? bustCoverUrl(localCoverPath) : null,
+    coverApplied: !!localCoverPath,
+  });
+});
+
 // Set a sequence's cover from a specific URL (used by manual search modal)
 router.post('/sequences/:id/cover', requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
