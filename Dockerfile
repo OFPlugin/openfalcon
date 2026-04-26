@@ -49,8 +49,11 @@ COPY --from=builder /build/node_modules ./node_modules
 # Copy the application source
 COPY . .
 
-# Don't ship the example config or any local config that snuck in
-RUN rm -f config.js config.example.js
+# Don't ship any local config that snuck in (would leak secrets), but DO keep
+# config.example.js — server.js falls back to it if config.js isn't mounted,
+# making "docker run" smoke-test friendly without compromising security
+# (config.example.js has placeholder values, not real secrets).
+RUN rm -f config.js
 
 # Data directory for SQLite + cover art uploads.
 # Mark as a volume so users remember to mount it.
