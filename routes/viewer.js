@@ -435,6 +435,27 @@ router.get('/now-playing-audio', (req, res) => {
   const startedAtMs = np.started_at ? new Date(np.started_at.replace(' ', 'T') + 'Z').getTime() : null;
   const elapsedSec = startedAtMs ? Math.max(0, (Date.now() - startedAtMs) / 1000) : 0;
 
+  // Look up the cached audio's hash and append it to the stream URL as a
+  // cache buster. Without this, the browser may serve stale bytes from
+  // its HTTP cache when the underlying file changes (e.g. the plugin
+  // re-syncs after we fix a format bug). The /api/audio-stream/<seq> URL
+  // itself doesn't change when bytes change — so we add ?v=<hash-prefix>.
+  // When the hash changes, the URL changes, browser fetches fresh.
+  //
+  // Falls back to no version param when the file isn't cached (FPP-proxy
+  // path) — there's no hash to anchor to. The route ignores unknown
+  // query params, so adding ?v=... is always safe.
+  let versionParam = '';
+  try {
+    const audioCache = require('../lib/audio-cache');
+    const cached = audioCache.getCachedFileForMediaName(seq.media_name);
+    if (cached && cached.hash) {
+      versionParam = '?v=' + cached.hash.slice(0, 8);
+    }
+  } catch (_) {
+    // Non-fatal — proceed without cache busting.
+  }
+
   res.json({
     playing: true,
     hasAudio: true,
@@ -452,17 +473,18 @@ router.get('/now-playing-audio', (req, res) => {
     // FPP's built-in /api/file/Music/<name> endpoint. Same-origin path always
     // works; the public URL is for cellular/external listeners hitting through
     // the public domain.
-    streamUrl: `/api/audio-stream/${encodeURIComponent(seq.name)}`,
+    streamUrl: `/api/audio-stream/${encodeURIComponent(seq.name)}${versionParam}`,
     publicStreamUrl: cfg.public_base_url
-      ? `${String(cfg.public_base_url).replace(/\/+$/, '')}/api/audio-stream/${encodeURIComponent(seq.name)}`
+      ? `${String(cfg.public_base_url).replace(/\/+$/, '')}/api/audio-stream/${encodeURIComponent(seq.name)}${versionParam}`
       : '',
     // Visual settings (snow, decoration, custom color) — always present
     ...visualConfig,
   });
 });
 
-// Audio proxy — fetches the file from FPP, streams it through. Supports HTTP
-// Range requests so the browser audio element can seek/resume properly.
+// Audio proxy — checks the local audio cache first (populated by the plugin
+// during sync). Falls back to proxying from FPP if not cached. Supports
+// HTTP Range requests so browsers can seek/resume.
 router.get('/audio-stream/:sequence', async (req, res) => {
   // Case-insensitive lookup in case viewer page or admin renamed the sequence
   // with different casing than what we have in DB.
@@ -474,6 +496,74 @@ router.get('/audio-stream/:sequence', async (req, res) => {
   if (!seq || !seq.media_name) {
     return res.status(404).send('Audio not available for this sequence');
   }
+
+  // ============================================================
+  // CACHE-FIRST PATH (v0.19.0+)
+  // ============================================================
+  // If the plugin has uploaded this audio file via the audio-cache
+  // sync, serve it directly from local disk. This is the fast path:
+  // no FPP round trip, no SD-card thrash, scales to many concurrent
+  // viewers because OS page cache handles repeated reads natively.
+  //
+  // Express's res.sendFile() handles Range requests, content-type,
+  // ETags, etc. for free. Falls through to the proxy path below
+  // only if the cache lookup misses — preserves backward compat
+  // with installs that haven't upgraded their plugin yet.
+  try {
+    const audioCache = require('../lib/audio-cache');
+    const cachedFile = audioCache.getCachedFileForMediaName(seq.media_name);
+    if (cachedFile) {
+      // Aggressive caching for cellular listeners. Audio file bytes are
+      // immutable — same hash, same content. Cloudflare or other edge
+      // caches can serve this aggressively.
+      res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
+      // Set the correct MIME type from what the plugin uploaded. Critical
+      // for non-MP3 audio (M4A from extracted video, OGG, FLAC, etc.) —
+      // browsers can decode any of these via Web Audio API but ONLY if
+      // the Content-Type matches the actual bytes. Without this, the
+      // cache file is stored as <hash>.bin and Express's content-type
+      // sniffing would label it application/octet-stream, which makes
+      // the browser refuse to play it as audio.
+      res.setHeader('Content-Type', cachedFile.mimeType);
+      // Diagnostic header so admins can verify cache vs FPP-proxy paths
+      // in browser dev tools without server log access. Visible under
+      // the Network tab → click request → Response Headers.
+      res.setHeader('X-Audio-Source', 'cache');
+      // sendFile handles Range/304/Accept-Ranges automatically. Browser
+      // gets sample-precise seeking exactly as it would from FPP.
+      return res.sendFile(cachedFile.path, (err) => {
+        if (err && !res.headersSent) {
+          // Local file disappeared between lookup and send — extremely
+          // rare race condition. Return 502 rather than retry; viewer's
+          // audio scheduler will retry on the next sync cycle.
+          console.error('[audio-stream] cache file send failed:', err.message);
+          res.status(502).send('Cached audio file unavailable');
+        }
+      });
+    }
+  } catch (e) {
+    // Cache subsystem error — fall through to FPP proxy. This is the
+    // backstop that keeps audio working even if the cache breaks.
+    console.warn('[audio-stream] cache lookup failed, falling back to FPP proxy:', e.message);
+  }
+
+  // ============================================================
+  // FPP PROXY FALLBACK
+  // ============================================================
+  // No cache hit. Hit FPP directly. This is what every audio request
+  // did before v0.19.0; it stays as the fallback for fresh installs
+  // before the plugin has uploaded files, plugin downgrades, or any
+  // case where cache is empty.
+  //
+  // Log cache miss so admins can spot unexpected fallbacks (e.g. the
+  // plugin failed to upload some sequences, or a sequence got renamed
+  // since the last sync). Once steady-state, this should rarely fire.
+  console.warn(
+    '[audio-stream] cache miss for "' + seq.media_name + '" — falling back to FPP proxy'
+  );
+  // Diagnostic header for the same reason as the cache-hit one above —
+  // browser dev tools can show cache vs proxy at a glance.
+  res.setHeader('X-Audio-Source', 'fpp');
 
   // Need FPP host from plugin status
   const cfg = getConfig();

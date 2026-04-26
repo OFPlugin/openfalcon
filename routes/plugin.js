@@ -512,5 +512,108 @@ router.get('/health', (req, res) => {
   });
 });
 
+// ============================================================
+// AUDIO CACHE — see lib/audio-cache.js for full architecture notes.
+// ============================================================
+// Plugin pushes audio files to ShowPilot during sync so viewer requests
+// can be served from local disk instead of proxying through FPP. This
+// scales to many concurrent viewers and dramatically improves audio
+// start latency by eliminating the cross-network hop.
+//
+// Three endpoints:
+//   GET  /audio-cache/manifest  — list of hashes ShowPilot already has
+//   POST /audio-cache/upload    — upload one file, body is raw bytes
+//   POST /audio-cache/link      — associate (mediaName → hash) when
+//                                 server already had the file from a
+//                                 previous sync
+// ============================================================
+
+const audioCache = require('../lib/audio-cache');
+
+// Plugin asks: "what hashes do you already have?" so it can upload only
+// what's missing. Returns a flat array — the plugin computes the diff
+// against its local file list. Cheap to call, idempotent.
+router.get('/audio-cache/manifest', (req, res) => {
+  const haveHashes = audioCache.getCachedHashes();
+  const stats = audioCache.getCacheStats();
+  res.json({
+    haveHashes,
+    fileCount: stats.fileCount,
+    totalBytes: stats.totalBytes,
+  });
+});
+
+// Plugin uploads a single file. Query string carries the hash and
+// mediaName; body is the raw bytes. We use raw body parsing (not JSON,
+// not multipart) to keep the plugin side simple — file bytes go in the
+// HTTP body verbatim, no encoding overhead.
+//
+// Why query string for hash/mediaName? Because the audio body can be
+// 5+ MB and we don't want to base64 it into JSON (33% size penalty)
+// or wrap it in multipart (more code on both sides for marginal benefit).
+//
+// Size limit is generous (50MB) — typical 4-min MP3 is 4-5MB but FLAC
+// or longer mixes could be larger. Headlining limit is express.json's
+// 1mb cap which doesn't apply here because we use express.raw().
+router.post(
+  '/audio-cache/upload',
+  // express.raw with high limit, accepts any content-type. We don't
+  // require a specific MIME because FPP could be serving MP3, OGG, FLAC,
+  // WAV — whatever the user uploaded to FPP's music dir.
+  express.raw({ type: '*/*', limit: '50mb' }),
+  (req, res) => {
+    const claimedHash = String(req.query.hash || '').toLowerCase();
+    const mediaName = String(req.query.mediaName || '');
+    const mimeType = req.query.mimeType ? String(req.query.mimeType) : (req.headers['content-type'] || 'audio/mpeg');
+
+    if (!audioCache.isValidHash(claimedHash)) {
+      return res.status(400).json({ error: 'Invalid hash format' });
+    }
+    if (!mediaName) {
+      return res.status(400).json({ error: 'mediaName required' });
+    }
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'Empty body — expected raw audio bytes' });
+    }
+
+    try {
+      audioCache.storeUploadedFile(req.body, claimedHash, mediaName, mimeType);
+      res.json({ ok: true, hash: claimedHash, sizeBytes: req.body.length });
+    } catch (err) {
+      // Hash mismatch is the most likely cause — return a structured error
+      // so the plugin can decide whether to retry or skip.
+      res.status(400).json({ error: err.message });
+    }
+  }
+);
+
+// Plugin says: "I have this mediaName mapped to this hash, and you
+// already told me you have the hash, so just link them." Avoids
+// re-uploading bytes we already have. Common case: same audio file
+// appears in multiple sequences, or sync runs after a no-op restart.
+router.post('/audio-cache/link', (req, res) => {
+  const { mediaName, hash } = req.body || {};
+  if (!hash || !audioCache.isValidHash(String(hash).toLowerCase())) {
+    return res.status(400).json({ error: 'Invalid hash format' });
+  }
+  if (!mediaName) {
+    return res.status(400).json({ error: 'mediaName required' });
+  }
+  try {
+    audioCache.linkMediaNameToHash(String(mediaName), String(hash).toLowerCase());
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Plugin can ask us to clean up cache entries for media files that no
+// longer correspond to any sequence. Useful at end of sync to keep
+// the cache from growing forever.
+router.post('/audio-cache/prune', (req, res) => {
+  const removed = audioCache.pruneOrphanedHashes();
+  res.json({ ok: true, removed });
+});
+
 module.exports = router;
 module.exports.pluginStatus = pluginStatus;

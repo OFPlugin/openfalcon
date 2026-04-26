@@ -258,6 +258,23 @@
       font-weight: 400;
       margin-left: 0.4rem;
     }
+    /* Beta pill — appears next to the version when the running build is
+       a beta. Uses warning-orange so it's visually distinct from the
+       normal version label and impossible to miss in a screenshot. */
+    .app-brand .app-beta-pill {
+      display: inline-block;
+      margin-left: 0.4rem;
+      padding: 1px 8px;
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #fff;
+      background: var(--status-warning, #f59e0b);
+      border-radius: 999px;
+      vertical-align: middle;
+      box-shadow: 0 0 6px rgba(245,158,11,0.4);
+    }
     .mode-pill {
       font-size: 0.72rem;
       padding: 4px 10px;
@@ -1275,7 +1292,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.18.17</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.19.5</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -2157,6 +2174,54 @@
           </div>
           <div id="copyTokenStatus" class="muted" style="margin-top: 0.5rem;"></div>
         </div>
+
+        <div class="card">
+          <h2>Audio Cache</h2>
+          <p class="muted">
+            When the FPP plugin syncs, it uploads audio files here. Viewers
+            then stream audio directly from ShowPilot instead of through FPP,
+            which is much faster and scales to many concurrent listeners.
+            If a file isn't cached, viewers fall back to streaming through FPP.
+          </p>
+          <div class="row" style="align-items: center; gap: 1rem; flex-wrap: wrap;">
+            <div>
+              <div class="muted" style="font-size: 0.8rem;">Cached files</div>
+              <div id="audioCacheCount" style="font-size: 1.4rem; font-weight: 600;">—</div>
+            </div>
+            <div>
+              <div class="muted" style="font-size: 0.8rem;">Total size</div>
+              <div id="audioCacheSize" style="font-size: 1.4rem; font-weight: 600;">—</div>
+            </div>
+            <div style="margin-left: auto; display: flex; gap: 0.5rem;">
+              <button class="secondary" onclick="pruneAudioCache()" title="Remove cache entries for sequences that no longer exist">Prune Orphans</button>
+              <button class="secondary" onclick="clearAudioCache()" title="Wipe everything in the cache — next sync re-uploads all">Clear All</button>
+              <button class="secondary" onclick="refreshAudioCacheStats()">Refresh</button>
+            </div>
+          </div>
+          <div id="audioCacheStatus" class="muted" style="margin-top: 0.75rem; font-size: 0.85rem;"></div>
+
+          <!-- File list. Hidden until Refresh runs at least once or until
+               the user expands. Folded by default to keep this card
+               compact when there are dozens of cached files. -->
+          <details style="margin-top: 1rem;">
+            <summary style="cursor: pointer; font-weight: 600; padding: 0.4rem 0;">Show file list</summary>
+            <div style="overflow-x: auto; margin-top: 0.5rem;">
+              <table style="width: 100%; font-size: 0.85rem;">
+                <thead>
+                  <tr>
+                    <th style="text-align: left;">Sequence</th>
+                    <th style="text-align: left;">Media file</th>
+                    <th style="text-align: right; white-space: nowrap;">Size</th>
+                    <th style="text-align: left;">Type</th>
+                    <th style="text-align: left;">Cached</th>
+                    <th style="width: 80px;"></th>
+                  </tr>
+                </thead>
+                <tbody id="audioCacheFiles"></tbody>
+              </table>
+            </div>
+          </details>
+        </div>
       </div>
 
       <!-- ============================================================
@@ -2357,6 +2422,7 @@
       if (name === 'stats') { loadStatsTab(); loadVisitorStats(); }
       if (name === 'sequences') loadSnapshots();
       if (name === 'users') loadUsers();
+      if (name === 'settings') refreshAudioCacheStats();
     }
 
     function copyShowToken() {
@@ -2368,6 +2434,166 @@
         s.style.color = 'var(--status-success)';
         setTimeout(() => { s.textContent = ''; }, 2000);
       });
+    }
+
+    // ============================================================
+    // Audio cache stats
+    // ============================================================
+    // Hits the admin endpoint and renders file count + total size in
+    // the Settings tab. Refreshed when the user opens that tab and on
+    // explicit Refresh button click. The plugin populates the cache
+    // via /api/plugin/audio-cache/upload during sync; this just
+    // displays what's there.
+    function formatBytes(n) {
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+      if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+      return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+    async function refreshAudioCacheStats() {
+      const countEl = document.getElementById('audioCacheCount');
+      const sizeEl = document.getElementById('audioCacheSize');
+      const statusEl = document.getElementById('audioCacheStatus');
+      if (!countEl || !sizeEl) return;
+      try {
+        const res = await fetch('/api/admin/audio-cache/stats', { credentials: 'include' });
+        if (!res.ok) {
+          statusEl.textContent = 'Failed to load stats (' + res.status + ')';
+          statusEl.style.color = 'var(--status-danger)';
+          return;
+        }
+        const data = await res.json();
+        countEl.textContent = data.fileCount;
+        sizeEl.textContent = formatBytes(data.totalBytes);
+        statusEl.textContent = data.fileCount === 0
+          ? 'No files cached yet — run Sync from the FPP plugin to populate.'
+          : '';
+        statusEl.style.color = 'var(--text-dim)';
+      } catch (e) {
+        statusEl.textContent = 'Error: ' + e.message;
+        statusEl.style.color = 'var(--status-danger)';
+      }
+      // Also refresh the per-file list. It may be hidden inside a
+      // <details> block, but populating it here means clicking "Show
+      // file list" reveals up-to-date content with no extra fetch.
+      refreshAudioCacheFiles();
+    }
+
+    // Refresh the per-file table. Separate from stats refresh so the
+    // smaller summary can update faster, and so callers can rebuild
+    // just the list (e.g. after deleting a row).
+    async function refreshAudioCacheFiles() {
+      const tbody = document.getElementById('audioCacheFiles');
+      if (!tbody) return;
+      try {
+        const res = await fetch('/api/admin/audio-cache/files', { credentials: 'include' });
+        if (!res.ok) {
+          tbody.innerHTML = '<tr><td colspan="6" class="muted" style="padding: 0.6rem;">Failed to load file list</td></tr>';
+          return;
+        }
+        const data = await res.json();
+        const files = data.files || [];
+        if (files.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="muted" style="padding: 0.6rem;">No cached files.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = files.map(function(f) {
+          // Sequence column: link to the sequence row if there's a match,
+          // or "(orphaned)" in muted color if the cache row no longer
+          // points at any active sequence.
+          const seqCell = f.sequence_display_name
+            ? '<span>' + escapeHtml(f.sequence_display_name) + '</span>'
+            : '<span class="muted" style="font-style: italic;">(orphaned)</span>';
+          const mediaCell = f.media_name
+            ? '<code style="font-size: 0.8rem;">' + escapeHtml(f.media_name) + '</code>'
+            : '<span class="muted">—</span>';
+          const ts = f.cached_at
+            ? new Date(f.cached_at + 'Z').toLocaleString()
+            : '—';
+          // Hash truncated for display; full hash kept in data attr for
+          // the delete handler.
+          const shortHash = f.hash ? f.hash.slice(0, 8) + '…' : '';
+          return '<tr data-hash="' + escapeAttr(f.hash) + '">' +
+            '<td>' + seqCell + '</td>' +
+            '<td>' + mediaCell + '</td>' +
+            '<td style="text-align: right; white-space: nowrap;">' + formatBytes(f.size_bytes || 0) + '</td>' +
+            '<td><span class="muted" style="font-size: 0.8rem;">' + escapeHtml(f.mime_type || 'audio/mpeg') + '</span></td>' +
+            '<td><span class="muted" style="font-size: 0.8rem;" title="' + escapeAttr(shortHash) + '">' + escapeHtml(ts) + '</span></td>' +
+            '<td><button class="danger" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="deleteCachedFile(\'' + escapeAttr(f.hash) + '\')">Delete</button></td>' +
+          '</tr>';
+        }).join('');
+      } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="6" class="muted" style="padding: 0.6rem;">Error: ' + escapeHtml(e.message) + '</td></tr>';
+      }
+    }
+
+    async function deleteCachedFile(hash) {
+      if (!hash) return;
+      const ok = await showConfirm(
+        'Delete this cached audio file?',
+        'The next plugin sync will re-upload it if the sequence still exists.'
+      );
+      if (!ok) return;
+      try {
+        const res = await fetch('/api/admin/audio-cache/files/' + encodeURIComponent(hash), {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+        if (!res.ok) {
+          await showAlert('Delete failed (' + res.status + ')');
+          return;
+        }
+        // Refresh both stats and list so the counts update too.
+        refreshAudioCacheStats();
+      } catch (e) {
+        await showAlert('Delete error: ' + e.message);
+      }
+    }
+
+    async function pruneAudioCache() {
+      const ok = await showConfirm(
+        'Prune orphaned cache entries?',
+        'This removes cache entries for sequences that no longer exist or have been replaced. Files for active sequences are kept.'
+      );
+      if (!ok) return;
+      try {
+        const res = await fetch('/api/admin/audio-cache/prune', {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (!res.ok) {
+          await showAlert('Prune failed (' + res.status + ')');
+          return;
+        }
+        const data = await res.json();
+        await showAlert('Pruned ' + (data.removed || 0) + ' orphaned entries.');
+        refreshAudioCacheStats();
+      } catch (e) {
+        await showAlert('Prune error: ' + e.message);
+      }
+    }
+
+    async function clearAudioCache() {
+      const ok = await showConfirm(
+        'Clear the ENTIRE audio cache?',
+        'This wipes every cached audio file. Next plugin sync will re-upload everything from scratch — first run will take longer than usual.'
+      );
+      if (!ok) return;
+      try {
+        const res = await fetch('/api/admin/audio-cache/clear', {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (!res.ok) {
+          await showAlert('Clear failed (' + res.status + ')');
+          return;
+        }
+        const data = await res.json();
+        await showAlert('Cleared ' + (data.removed || 0) + ' cached files.');
+        refreshAudioCacheStats();
+      } catch (e) {
+        await showAlert('Clear error: ' + e.message);
+      }
     }
   </script>
 
@@ -3215,6 +3441,11 @@
       document.getElementById('sequenceCount').textContent = `(${r.data.length})`;
       const tbody = document.getElementById('sequencesBody');
       tbody.innerHTML = '';
+      // tbody.innerHTML wipes out any open preview row, so reset the
+      // tracker — without this, clicking the preview button on the same
+      // sequence again would close-then-not-reopen because we'd think
+      // it's still open.
+      _activePreviewId = null;
       r.data.forEach(seq => {
         tbody.appendChild(buildSequenceRow(seq));
       });
@@ -3255,6 +3486,7 @@
         <td><label class="toggle" style="transform:scale(0.7);"><input type="checkbox" ${seq.jukeboxable ? 'checked' : ''} onchange="updateSeqField(${seq.id}, 'jukeboxable', this.checked ? 1 : 0)" /><span class="slider"></span></label></td>
         <td><label class="toggle" style="transform:scale(0.7);"><input type="checkbox" ${seq.is_psa ? 'checked' : ''} onchange="updateSeqField(${seq.id}, 'is_psa', this.checked ? 1 : 0)" /><span class="slider"></span></label></td>
         <td style="white-space: nowrap;">
+          <button class="secondary" onclick="toggleSeqPreview(${seq.id})" title="Preview the audio for this sequence" style="margin-right: 0.4rem;">▶</button>
           <button class="secondary" onclick="openTrackSearchModal(${seq.id})" title="Search iTunes / MusicBrainz for the right title, artist, and cover" style="margin-right: 0.4rem;">🔍 Search</button>
           <button class="danger" onclick="delSeq(${seq.id})">Delete</button>
         </td>
@@ -3284,6 +3516,120 @@
       // Update local cache silently; don't reload to avoid yanking the user's focus
       const seq = sequencesCache.find(s => s.id === id);
       if (seq) seq[field] = trimmed;
+    }
+
+    // ======= Audio preview =======
+    // Toggles an inline player row beneath the sequence. Only one preview
+    // can be open at a time — opening another closes the existing one.
+    // Shows whether audio came from local cache or FPP fallback so admins
+    // can verify the cache is doing its job.
+    let _activePreviewId = null;
+
+    function toggleSeqPreview(seqId) {
+      // If clicking the same sequence's button, just close.
+      if (_activePreviewId === seqId) {
+        closeSeqPreview();
+        return;
+      }
+      // Close any other open preview first.
+      if (_activePreviewId !== null) {
+        closeSeqPreview();
+      }
+      openSeqPreview(seqId);
+    }
+
+    function closeSeqPreview() {
+      const existing = document.querySelector('.seq-preview-row');
+      if (existing) {
+        // Stop any active audio before removing — otherwise it keeps
+        // playing in the background even though the controls disappeared.
+        const audio = existing.querySelector('audio');
+        if (audio) {
+          try { audio.pause(); } catch (e) {}
+          // Revoke any blob URL we created (none right now, but reserved
+          // for future if we switch to blob fetching).
+        }
+        existing.remove();
+      }
+      _activePreviewId = null;
+    }
+
+    function openSeqPreview(seqId) {
+      const seq = (sequencesCache || []).find(s => s.id === seqId);
+      if (!seq) return;
+      // Locate the row to insert the preview row beneath.
+      const tbody = document.getElementById('sequencesBody');
+      const targetRow = tbody.querySelector('tr[data-id="' + seqId + '"]');
+      if (!targetRow) return;
+      // Total column count needs to match the sequences table or the
+      // colspan won't fill the whole row visually.
+      const colCount = tbody.parentElement.querySelector('thead tr').children.length;
+      const previewRow = document.createElement('tr');
+      previewRow.className = 'seq-preview-row';
+      previewRow.dataset.previewFor = seqId;
+      previewRow.innerHTML =
+        '<td colspan="' + colCount + '" style="padding: 0.6rem 1rem; background: var(--bg-elevated, rgba(255,255,255,0.03));">' +
+          '<div class="row" style="align-items: center; gap: 0.75rem; flex-wrap: wrap;">' +
+            '<audio id="seqPreviewAudio_' + seqId + '" controls preload="auto" style="flex: 1; min-width: 280px; height: 36px;"></audio>' +
+            '<span id="seqPreviewSource_' + seqId + '" class="muted" style="font-size: 0.85rem; min-width: 130px;">Loading…</span>' +
+            '<button class="secondary" onclick="closeSeqPreview()" style="padding: 0.3rem 0.7rem;">Close</button>' +
+          '</div>' +
+          '<div id="seqPreviewError_' + seqId + '" style="display: none; color: var(--status-danger); font-size: 0.85rem; margin-top: 0.4rem;"></div>' +
+        '</td>';
+      targetRow.parentElement.insertBefore(previewRow, targetRow.nextSibling);
+      _activePreviewId = seqId;
+
+      // /api/audio-stream/:sequence is keyed on the FPP sequence name —
+      // same endpoint the viewers use. This means the preview tests the
+      // exact same code path real users hit.
+      //
+      // Append ?t=<now> to force the browser to fetch fresh bytes every
+      // time the admin opens a preview. Admin previews are one-off
+      // diagnostics — there's no benefit to leveraging the browser's
+      // HTTP cache, and it actively HURTS to do so when we're trying to
+      // verify a recent file change worked.
+      const audio = document.getElementById('seqPreviewAudio_' + seqId);
+      const sourceEl = document.getElementById('seqPreviewSource_' + seqId);
+      const errorEl = document.getElementById('seqPreviewError_' + seqId);
+      const streamUrl = '/api/audio-stream/' + encodeURIComponent(seq.name) + '?t=' + Date.now();
+
+      audio.src = streamUrl;
+      audio.addEventListener('error', function() {
+        // Audio element's error event fires when the network/decode fails.
+        // Codes are mostly unhelpful (4 = MEDIA_ERR_SRC_NOT_SUPPORTED) so
+        // we just say generic — admin can dig further if needed.
+        errorEl.style.display = '';
+        errorEl.textContent = 'Audio playback error. The file may not be cached yet, or the server returned an error.';
+        sourceEl.textContent = 'failed';
+        sourceEl.style.color = 'var(--status-danger)';
+      });
+
+      // Probe the source via HEAD — this lets us read the X-Audio-Source
+      // header without forcing the full audio download just for the
+      // indicator. The audio element does its own GET in parallel.
+      fetch(streamUrl, { method: 'HEAD', credentials: 'include' })
+        .then(function(res) {
+          if (!res.ok) {
+            sourceEl.textContent = 'HTTP ' + res.status;
+            sourceEl.style.color = 'var(--status-danger)';
+            return;
+          }
+          const src = (res.headers.get('X-Audio-Source') || 'unknown').toLowerCase();
+          if (src === 'cache') {
+            sourceEl.textContent = '⚡ from cache';
+            sourceEl.style.color = 'var(--status-success, #4ade80)';
+          } else if (src === 'fpp') {
+            sourceEl.textContent = '↪ via FPP proxy';
+            sourceEl.style.color = 'var(--status-warning, #f59e0b)';
+          } else {
+            sourceEl.textContent = src;
+            sourceEl.style.color = 'var(--text-dim)';
+          }
+        })
+        .catch(function(err) {
+          sourceEl.textContent = 'probe failed';
+          sourceEl.style.color = 'var(--status-danger)';
+        });
     }
 
     async function promptImageUrl(id, current) {
