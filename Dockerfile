@@ -22,8 +22,16 @@ WORKDIR /build
 # package.json hasn't changed. (Big deal — recompiling better-sqlite3 takes 30s+)
 COPY package.json package-lock.json* ./
 
-# Production install only — no devDependencies, no audit noise
-RUN npm ci --omit=dev --no-audit --no-fund
+# Install production deps. Prefer `npm ci` when a lockfile is present (faster,
+# deterministic). Fall back to `npm install` if no lockfile exists yet — this
+# lets the Dockerfile work right after `git clone` even if the project hasn't
+# committed a package-lock.json. Lockfile users get pinned versions; non-lock
+# users get the latest matching package.json semver ranges.
+RUN if [ -f package-lock.json ]; then \
+        npm ci --omit=dev --no-audit --no-fund; \
+    else \
+        npm install --omit=dev --no-audit --no-fund; \
+    fi
 
 # ---------- Stage 2: runtime ----------
 FROM node:20-alpine
