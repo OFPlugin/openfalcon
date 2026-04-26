@@ -1051,6 +1051,25 @@
     // check already proved they're in range, so we trust that for the
     // first window and only start enforcing on watcher updates after.
     let audioStartedAtMs = 0;
+    // ---- Drift measurement anchors (v0.18.17+) ----
+    // When we schedule a buffer to play, we capture two things:
+    //   trackScheduledAtAudioCtx — the audioCtx.currentTime value at the
+    //     moment of src.start(). This is the audio-clock anchor that
+    //     advances at exactly the rate of the audio output hardware.
+    //   trackScheduledAtPositionSec — where in the track that anchor
+    //     corresponds to (i.e. startOffset). Subsequent audio-clock time
+    //     past the anchor maps directly to track position.
+    // Together these let updateDriftDisplay() compute "where is audio
+    // ACTUALLY playing right now?" and compare to "where SHOULD it be
+    // per server time?" — the difference is the real drift.
+    //
+    // We also capture outputLatency at schedule time because some
+    // browsers update it as audio devices change. Using a snapshot from
+    // schedule-time means our drift number is consistent with what we
+    // told the audio system to do.
+    let trackScheduledAtAudioCtx = 0;
+    let trackScheduledAtPositionSec = 0;
+    let trackScheduledOutputLatency = 0;
     let pendingStartTimeout = null;
 
     // ---- UI handlers ----
@@ -1538,6 +1557,26 @@
         if (currentSource === src) { currentSource = null; setPlayIcon(false); }
       };
       currentSource = src;
+
+      // Capture the drift-measurement anchors. Together with audioCtx.
+      // currentTime at any later moment, these let updateDriftDisplay()
+      // compute the actual playback position based on the AUDIO CLOCK
+      // (which advances at exactly the rate of the audio output) rather
+      // than wall time (which can drift relative to the audio clock,
+      // especially on devices with crystal oscillator differences).
+      trackScheduledAtAudioCtx = startWhen;
+      trackScheduledAtPositionSec = startOffset;
+      // outputLatency is the OS-reported delay between samples being
+      // scheduled and samples actually leaving the speaker. We snapshot
+      // it here so the drift display accounts for "what you HEAR now
+      // was scheduled outputLatency seconds ago." Browsers without this
+      // property fall back to baseLatency, then to 0.
+      trackScheduledOutputLatency = (
+        audioCtx.outputLatency
+        || audioCtx.baseLatency
+        || 0
+      );
+
       // Mark when audio playback actually started. The watchPosition
       // grace period uses this to ignore the (frequently stale) first
       // watcher callback that fires immediately after audio begins.
@@ -1556,6 +1595,12 @@
         try { currentSource.disconnect(); } catch {}
         currentSource = null;
       }
+      // Clear drift anchors so updateDriftDisplay() bails until the
+      // next track schedules new ones. Without this, the display would
+      // keep drawing using stale anchors after stop().
+      trackScheduledAtAudioCtx = 0;
+      trackScheduledAtPositionSec = 0;
+      trackScheduledOutputLatency = 0;
     }
 
     // If the audio gate fires during playback (e.g. user walked outside the
@@ -1566,22 +1611,53 @@
       if (statusEl) statusEl.textContent = 'Audio paused — outside show range';
     });
 
-    // ---- Drift display (visual only — Web Audio API is sample-precise so
-    //      drift here is just for user reassurance) ----
+    // ---- Drift display (real measurement) ----
+    // Compares where audio is ACTUALLY playing (per the audio clock,
+    // adjusted for output latency) to where it SHOULD be playing (per
+    // server time). The difference is the real drift in milliseconds.
+    //
+    // Sign convention: positive = audio is AHEAD of server (audio came
+    // out faster than expected); negative = audio is BEHIND (delayed).
+    //
+    // What this catches:
+    //   - Initial sync error from asymmetric request/response latency
+    //   - Audio clock drift over time (different oscillators)
+    //   - Output latency that wasn't accounted for at scheduling
+    //
+    // What this does NOT catch:
+    //   - Bluetooth/AirPods latency (hidden from the browser)
+    //   - Receiver/DSP processing latency (downstream of OS audio)
+    //   - Speaker physical placement delay (sound takes ~3ms per meter
+    //     to travel — usually negligible, but two devices on opposite
+    //     sides of a room can be 30-40ms apart just from physics)
     function updateDriftDisplay() {
-      if (!currentSource || !audioCtx || !trackStartedAtMs) {
+      if (!currentSource || !audioCtx || !trackStartedAtMs || !trackScheduledAtAudioCtx) {
         if (driftEl) driftEl.textContent = '';
         return;
       }
+      // Where is audio actually playing right now? The audio clock has
+      // advanced (audioCtx.currentTime - trackScheduledAtAudioCtx) seconds
+      // since we scheduled. Add that to where the track was at scheduling
+      // time. Then subtract output latency: "what the speaker is emitting
+      // RIGHT NOW" was actually scheduled outputLatency seconds ago.
+      const audioElapsed = audioCtx.currentTime - trackScheduledAtAudioCtx;
+      const actualPosition = trackScheduledAtPositionSec + audioElapsed - trackScheduledOutputLatency;
+
+      // Where SHOULD it be per server time?
       const serverNow = Date.now() + clockOffset;
       const expectedPosition = (serverNow - trackStartedAtMs) / 1000;
-      // Estimate where we ARE in the buffer based on AudioContext.currentTime
-      // (this is an approximation since we can't query active SourceNode position directly)
-      const actualPosition = expectedPosition; // sample-precise scheduling means this matches
+
+      // Drift in seconds, rendered in ms with sign
       const drift = actualPosition - expectedPosition;
       const ms = Math.round(drift * 1000);
       driftEl.textContent = '· ' + (ms >= 0 ? '+' : '') + ms + 'ms';
-      driftEl.style.color = Math.abs(ms) < 100 ? '#4ade80' : (Math.abs(ms) < 500 ? '#fb923c' : '#ef4444');
+      // Color thresholds: green <100ms, orange <500ms, red beyond.
+      // Worth noting: 100ms is the rough threshold where humans start
+      // to perceive lip-sync issues with video; for music it's less
+      // critical but still audible if you can hear two devices side by
+      // side.
+      const absMs = Math.abs(ms);
+      driftEl.style.color = absMs < 100 ? '#4ade80' : (absMs < 500 ? '#fb923c' : '#ef4444');
     }
 
     // ---- Player decoration ----
