@@ -348,9 +348,16 @@ If Windows Firewall prompts you, allow the Node.js process to communicate. To ru
 
 Multi-architecture images (amd64 + arm64) are published to GitHub Container Registry. Pull, configure, run — no build step required.
 
+**Image:** `ghcr.io/showpilotfpp/showpilot:latest`
+**Tags:** [browse all available tags](https://github.com/ShowPilotFPP/ShowPilot/pkgs/container/showpilot)
+
 ```bash
 # Make a working directory
 mkdir showpilot && cd showpilot
+
+# Pull the image (this is what `docker compose up` will do automatically,
+# but pulling explicitly first lets you confirm connectivity to GHCR)
+docker pull ghcr.io/showpilotfpp/showpilot:latest
 
 # Set up data + config directories
 mkdir showpilot-data showpilot-config
@@ -361,9 +368,11 @@ mv config.example.js showpilot-config/config.js
 nano showpilot-config/config.js   # change jwtSecret and showToken to random strings
                                    # (`openssl rand -hex 32` generates a good random value)
 
-# Download the compose file and edit if needed (default port is 3100)
+# Download the compose file (which references the image above)
 curl -O https://raw.githubusercontent.com/ShowPilotFPP/ShowPilot/main/docker-compose.yml.example
 mv docker-compose.yml.example docker-compose.yml
+# Edit if you need to change the port mapping or paths
+nano docker-compose.yml
 
 # Start it
 docker compose up -d

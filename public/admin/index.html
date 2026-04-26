@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ShowPilot Admin</title>
-  <link rel="icon" href="data:,">
+  <link rel="icon" type="image/svg+xml" href="/favicons/favicon-monogram.svg">
+  <link rel="alternate icon" href="/favicons/favicon-monogram.svg">
   <style>
     /* ============================================================
      * THEME SYSTEM
@@ -1154,7 +1155,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.18.5</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.18.7</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1519,6 +1520,28 @@
                 <span id="tplDraftBadge" class="of-tpl-status of-tpl-status-saved">SAVED</span>
                 <button class="secondary of-tpl-bypass-lock" id="tplLockBtn" onclick="toggleTemplateLock()" title="Lock to prevent accidental edits">🔓 Lock</button>
               </div>
+
+              <!-- Custom favicon — collapsible to keep the editor uncluttered -->
+              <details style="margin-bottom: 0.5rem; padding: 0.5rem 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px;">
+                <summary style="cursor: pointer; font-size: 0.85rem; color: var(--text-muted); user-select: none;">
+                  🌐 Custom favicon for viewer page <span id="tplFaviconStatus" class="muted" style="margin-left: 0.5rem;"></span>
+                </summary>
+                <div style="margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.5rem;">
+                  <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                    <label style="font-size: 0.85rem; min-width: 70px;">Upload:</label>
+                    <input type="file" id="tplFaviconFile" accept="image/png,image/jpeg,image/svg+xml,image/x-icon,.ico" style="margin: 0; flex: 1; min-width: 200px;" onchange="handleFaviconUpload(event)" />
+                    <button type="button" class="secondary" onclick="clearFavicon()" id="tplFaviconClearBtn" style="margin: 0;">Remove</button>
+                  </div>
+                  <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                    <label style="font-size: 0.85rem; min-width: 70px;">Or URL:</label>
+                    <input type="text" id="tplFaviconUrl" placeholder="https://example.com/favicon.png" style="margin: 0; flex: 1; min-width: 200px;" oninput="onFaviconUrlInput()" />
+                    <span id="tplFaviconPreview" style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-tertiary);"></span>
+                  </div>
+                  <p class="muted" style="margin: 0; font-size: 0.78rem;">
+                    Recommended: 32×32 or larger square SVG/PNG, under 100KB. Some browsers cache aggressively — viewers may need a hard refresh to see changes.
+                  </p>
+                </div>
+              </details>
 
               <!-- Locked banner — appears when the selected template is locked -->
               <div id="tplLockedBanner" class="of-tpl-locked-banner" style="display:none;">
@@ -3695,6 +3718,10 @@
       if (!r.ok) return;
       const tpl = r.data;
       document.getElementById('tplName').value = tpl.name;
+      // Favicon
+      document.getElementById('tplFaviconUrl').value = tpl.favicon_url || '';
+      document.getElementById('tplFaviconFile').value = '';
+      updateFaviconPreview();
       loadedContent = tpl.html;
 
       // Decide which mode to open in based on the stored template mode
@@ -3740,6 +3767,83 @@
     }
 
     function safeJsonParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+    // ============================================================
+    // Custom favicon helpers
+    // ============================================================
+    // Three values flow through the same field (`tplFaviconUrl`):
+    //   - empty string  → no custom favicon (browser falls back to default)
+    //   - URL string    → e.g. https://example.com/icon.png
+    //   - data: URL     → produced by handleFaviconUpload when a file is picked
+    // The renderer treats all three identically — drops the value into a
+    // <link rel="icon" href="...">. The UI just cares about showing a useful
+    // preview and a status indicator on the collapsible summary.
+    function updateFaviconPreview() {
+      const url = document.getElementById('tplFaviconUrl').value.trim();
+      const preview = document.getElementById('tplFaviconPreview');
+      const status = document.getElementById('tplFaviconStatus');
+      preview.innerHTML = '';
+      if (!url) {
+        status.textContent = '(none)';
+        return;
+      }
+      // Identify visually whether this is uploaded vs URL
+      if (url.startsWith('data:')) {
+        status.textContent = '(uploaded)';
+      } else {
+        status.textContent = '(URL)';
+      }
+      const img = document.createElement('img');
+      img.src = url;
+      img.style.cssText = 'width: 24px; height: 24px; object-fit: contain;';
+      img.onerror = () => {
+        preview.innerHTML = '<span style="font-size: 0.7rem; color: var(--text-muted);">⚠</span>';
+      };
+      preview.appendChild(img);
+    }
+
+    function onFaviconUrlInput() {
+      // When the user types directly in the URL field, clear any pending file
+      // selection so it's clear which one will be saved (the URL).
+      document.getElementById('tplFaviconFile').value = '';
+      updateFaviconPreview();
+      // Mark as dirty so Save Changes button activates
+      hasDraft = true;
+      updateDraftButtons();
+    }
+
+    function clearFavicon() {
+      document.getElementById('tplFaviconUrl').value = '';
+      document.getElementById('tplFaviconFile').value = '';
+      updateFaviconPreview();
+      hasDraft = true;
+      updateDraftButtons();
+    }
+
+    function handleFaviconUpload(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      // Soft cap at ~150KB raw — base64 inflates by ~33%, leaving headroom
+      // under the server's 200KB encoded limit. Anything over this is almost
+      // certainly oversized for a favicon anyway.
+      if (file.size > 150 * 1024) {
+        alert('Favicon file is too large. Pick something under 150KB — favicons should be tiny (32x32 or so).');
+        event.target.value = '';
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        // Drop the data URL straight into the URL field. Save-on-commit picks
+        // it up like any other URL value. No separate upload endpoint needed
+        // since favicons are tiny.
+        document.getElementById('tplFaviconUrl').value = reader.result;
+        updateFaviconPreview();
+        hasDraft = true;
+        updateDraftButtons();
+      };
+      reader.onerror = () => alert('Could not read the favicon file. Try a different one.');
+      reader.readAsDataURL(file);
+    }
 
     // Apply the locked/unlocked visual state to the editor. When locked:
     //   - Banner is shown
@@ -4124,12 +4228,13 @@
       // Make sure latest changes are flushed before committing
       if (draftDebounceTimer) { clearTimeout(draftDebounceTimer); draftDebounceTimer = null; }
       await saveDraftNow();
-      // Also update the template name if changed
+      // Also update the template name + favicon if changed
       const name = document.getElementById('tplName').value.trim();
+      const favicon_url = document.getElementById('tplFaviconUrl').value.trim();
       if (name) {
         await api('/templates/' + selectedTplId, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ name, favicon_url }),
         });
       }
       const r = await api('/templates/' + selectedTplId + '/commit', { method: 'POST' });

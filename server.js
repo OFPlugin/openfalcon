@@ -109,7 +109,7 @@ app.get('/', (req, res) => {
       WHERE played = 0 ORDER BY requested_at ASC
     `).all();
 
-    const html = renderTemplate(tpl.html, {
+    const html = renderTemplate(tpl, {
       config: cfg,
       sequences: sequencesBusted,
       voteCounts,

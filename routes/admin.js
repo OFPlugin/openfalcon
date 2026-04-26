@@ -685,7 +685,7 @@ router.post('/templates', requireAdmin, (req, res) => {
 
 router.put('/templates/:id', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
-  const { name, html } = req.body || {};
+  const { name, html, favicon_url } = req.body || {};
   const existing = db.prepare(`SELECT * FROM viewer_page_templates WHERE id = ?`).get(id);
   if (!existing) return res.status(404).json({ error: 'Template not found' });
   if (existing.locked) return res.status(423).json({ error: 'Template is locked. Unlock to edit.' });
@@ -694,6 +694,18 @@ router.put('/templates/:id', requireAdmin, (req, res) => {
   const params = { id, now: new Date().toISOString() };
   if (name !== undefined) { updates.push('name = @name'); params.name = String(name).trim(); }
   if (html !== undefined) { updates.push('html = @html'); params.html = String(html); }
+  if (favicon_url !== undefined) {
+    // Light validation — accept empty string (clears favicon), URL-ish strings,
+    // or data: URLs from the file-upload path. Cap data URLs at ~200KB encoded
+    // (a roomy ceiling for any reasonable favicon — even a 256x256 PNG fits)
+    // to prevent someone from stuffing a large image into the field.
+    const v = String(favicon_url);
+    if (v.length > 200000) {
+      return res.status(413).json({ error: 'Favicon too large (max ~200KB after base64 encoding).' });
+    }
+    updates.push('favicon_url = @favicon_url');
+    params.favicon_url = v;
+  }
   if (updates.length === 0) return res.json({ ok: true });
 
   updates.push('updated_at = @now');
