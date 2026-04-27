@@ -1234,12 +1234,23 @@
         gainNode.gain.value = isMuted ? 0 : 1;
         gainNode.connect(audioCtx.destination);
         statusEl.textContent = 'Loading…';
+        // Establish accurate clock offset BEFORE first sync poll. The first
+        // poll's track-start timestamp uses clockOffset to compute initial
+        // playback position; if clockOffset is wrong by 200ms here, every
+        // viewer joining at the same time gets a different bias, and they
+        // drift apart from each other. Burst sync up front prevents that.
+        await syncClockBurst(5);
         await syncOnce();
         // Re-sync periodically — once per second is enough since track-start
         // anchoring means we don't need continuous position updates.
         pollTimer = setInterval(syncOnce, 1000);
         // Drift correction loop (cheap — just compares client clock to expected)
         driftTimer = setInterval(updateDriftDisplay, 250);
+        // Refresh clock offset every 30s with a short burst. Clock drift on
+        // most devices is a few ms/minute, but phones waking from sleep or
+        // switching networks can suddenly jump by a lot. Cheap to keep
+        // current rather than discover staleness when sync goes off.
+        setInterval(() => syncClockBurst(3), 30000);
 
         // Subscribe to live position updates from the server. The plugin
         // pushes "FPP is at position X.Y" via /api/plugin/position; the
@@ -1487,7 +1498,64 @@
       currentMediaName = null;
     }
 
-    // ---- Sync poll ----
+    // ---- NTP-style clock sync (burst pings) ----
+    //
+    // Establishes accurate clock offset between this client and the server.
+    // Without accurate sync, two phones aligning to "FPP position + elapsed
+    // since update" will drift apart because each computes elapsed using
+    // its own (skewed) Date.now(). The single-sample offset embedded in
+    // now-playing-audio polls has 50-200ms of jitter from network variance;
+    // burst sync improves this to ~10-20ms by:
+    //   1. Firing N parallel pings to /api/time
+    //   2. Recording (t_send_local, t_recv_local, t_server) for each
+    //   3. Computing offset = t_server + rtt/2 - t_recv_local
+    //   4. Discarding outlier RTTs (sort by rtt, keep best half)
+    //   5. Averaging the offsets from the kept samples
+    //
+    // The "discard outliers" step is key — a single bad ping (network
+    // hiccup, GC pause, etc.) would skew an unfiltered average by tens
+    // of ms. PulseMesh's implementation does similar burst+filter logic
+    // on a dedicated WebSocket; we use HTTP since we're not building a
+    // separate connection just for this.
+    let lastClockSyncAt = 0;
+    async function syncClockBurst(burstSize = 5) {
+      const samples = [];
+      // Fire requests in PARALLEL — sequential would just sample at the
+      // same network condition each time. Parallel exposes the variance
+      // so outlier filtering can do its job.
+      const promises = [];
+      for (let i = 0; i < burstSize; i++) {
+        promises.push((async () => {
+          const t0 = Date.now();
+          try {
+            const r = await fetch('/api/time', { credentials: 'include', cache: 'no-store' });
+            const t1 = Date.now();
+            const data = await r.json();
+            if (typeof data.t === 'number') {
+              const rtt = t1 - t0;
+              const oneWay = rtt / 2;
+              const offset = data.t + oneWay - t1;
+              samples.push({ rtt, offset });
+            }
+          } catch (e) {
+            // Silently drop failed pings — we just have fewer samples.
+          }
+        })());
+      }
+      await Promise.all(promises);
+
+      if (samples.length === 0) return; // bail if all failed
+      // Sort by RTT ascending — lowest RTT samples have tightest one-way
+      // latency estimate (network was quiet, less asymmetry to worry about).
+      samples.sort((a, b) => a.rtt - b.rtt);
+      // Keep the best half (or all if we have <4 samples).
+      const keep = samples.length >= 4 ? samples.slice(0, Math.ceil(samples.length / 2)) : samples;
+      const avgOffset = keep.reduce((sum, s) => sum + s.offset, 0) / keep.length;
+
+      clockOffset = avgOffset;
+      lastClockSyncAt = Date.now();
+    }
+
     async function syncOnce() {
       try {
         // If the gate is latched (panel hidden, user kicked out for any
@@ -1527,9 +1595,15 @@
 
         lastSyncResponse = data;
 
-        // Clock offset: account for half the round-trip as one-way latency
-        const oneWayLatency = (reqEnd - reqStart) / 2;
-        clockOffset = data.serverNowMs - reqEnd + oneWayLatency;
+        // Update clock offset only if we haven't done a burst sync yet.
+        // Burst sync (syncClockBurst) is much more accurate; once it's
+        // run we leave clockOffset alone except for periodic refreshes.
+        // This prevents the single-sample latency-jittered estimate from
+        // overwriting our good measurement on every poll.
+        if (lastClockSyncAt === 0) {
+          const oneWayLatency = (reqEnd - reqStart) / 2;
+          clockOffset = data.serverNowMs - reqEnd + oneWayLatency;
+        }
 
         // Apply decoration theme (cheap — only does work if it changed)
         applyDecoration(data.playerDecoration, data.playerDecorationAnimated, data.playerCustomColor);

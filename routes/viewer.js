@@ -120,6 +120,26 @@ function runSafeguards(req, res, requiredMode) {
   return cfg;
 }
 
+// GET /api/time
+// ============================================================
+// Lightweight time endpoint for NTP-style clock sync. The viewer
+// calls this in bursts of 3-5 to estimate clock skew between phone
+// and server with ~10-20ms accuracy. The implementation is deliberately
+// minimal — no auth, no DB, no logging — to minimize server-side
+// processing latency, which would otherwise corrupt the round-trip
+// time measurement and skew the offset calculation.
+//
+// Why this matters: phones' Date.now() can be off from real time by
+// hundreds of ms or more, especially after waking from sleep, and
+// each phone is off by a different amount. Without accurate clock
+// sync, two phones aligning to "FPP position + elapsed since update"
+// drift apart because they each compute "elapsed" using their own
+// (wrong) clocks. With this endpoint, both phones derive an accurate
+// server-time reference and align to the same target.
+router.get('/time', (req, res) => {
+  res.json({ t: Date.now() });
+});
+
 router.get('/state', (req, res) => {
   const cfg = getConfig();
   const nowPlaying = getNowPlaying();
