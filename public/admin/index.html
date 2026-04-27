@@ -1389,7 +1389,12 @@
   <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
-      navigator.serviceWorker.register('/sw.js').catch(function() { /* harmless */ });
+      // Register the service worker scoped to /admin/ so it doesn't
+      // clash with the viewer's root-scoped registration. Without
+      // distinct scopes, Android Chrome treats both manifests as the
+      // same installable app and refuses to install the second one
+      // when the first is already installed.
+      navigator.serviceWorker.register('/sw.js', { scope: '/admin/' }).catch(function() { /* harmless */ });
     });
   }
   window.addEventListener('beforeinstallprompt', function(e) {
@@ -1428,7 +1433,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.23.4</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.23.5</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">

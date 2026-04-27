@@ -237,6 +237,14 @@ app.get('/admin-manifest.json', (req, res) => {
   // because the route serves SVG bytes; mismatched type causes
   // Android to reject the icon and fail installability.
   res.json({
+    // The 'id' field is what browsers use to uniquely identify a PWA
+    // for install purposes. Without distinct IDs, two manifests on
+    // the same origin clash — the browser treats them as the same app
+    // and refuses to install one if the other is already installed.
+    // ParkHopper and similar multi-app sites work because each app
+    // declares its own ID. The ID can be any string; convention is
+    // a path-like value.
+    id: '/admin',
     name: 'ShowPilot Admin',
     short_name: 'ShowPilot',
     start_url: '/admin/',
@@ -276,6 +284,10 @@ app.get('/viewer-manifest.json', (req, res) => {
     if (m) iconType = m[1];
   }
   res.json({
+    // See admin manifest for the rationale on the 'id' field — it's
+    // what lets the browser distinguish admin and viewer as separate
+    // installable apps even though they share an origin.
+    id: '/viewer',
     name,
     short_name: name.length > 12 ? name.slice(0, 12) : name,
     start_url: '/',
