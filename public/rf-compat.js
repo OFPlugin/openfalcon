@@ -1033,6 +1033,12 @@
     let trackDuration = 0;        // total length in seconds
     let audioSyncOffsetMs = 0;    // per-show offset to compensate for FPP audio output latency vs cache delivery speed. Server sends this; positive = audio plays LATER (compensates for too-early arrival)
 
+    // The HTML5 <audio> element used for playback. We use HTML5 audio
+    // (rather than Web Audio API) because it provides much better
+    // multi-phone sync — see comments in handleTrackChange. Reset to
+    // null after stopAudio.
+    let htmlAudio = null;
+
     // Live position from FPP. When the plugin is running >= 0.11.0, it
     // pushes "FPP is at position X.Y as of timestamp T" updates every
     // ~500ms via socket.io. We use this as the authoritative anchor for
@@ -1143,6 +1149,8 @@
     // this, jitter near the threshold would trigger correction on every
     // tick, which would just produce an ugly chain of crossfades.
     let lastCrossfadeAtCtx = 0;
+    // Same idea but for HTML5 re-seek correction (in wall-clock ms).
+    let lastReseekAtMs = 0;
 
     // ---- UI handlers ----
     // When the audio distance gate is enabled (admin opt-in), tapping the
@@ -1178,20 +1186,28 @@
     closeBtn.onclick = () => setMode('closed');
     minimizedPill.onclick = () => setMode('open');
     playBtn.onclick = () => {
-      if (currentSource) {
-        // Stop and re-sync from current position
+      // With HTML5 audio, the playBtn acts as a stop/restart toggle.
+      // Stop: clear out the audio element so the user can re-sync.
+      // Restart: kick a syncOnce() which triggers handleTrackChange with
+      // fresh data, and that builds a new <audio> element seeked to the
+      // current expected position.
+      if (htmlAudio && !htmlAudio.paused) {
         stopAudio();
         statusEl.textContent = 'Resuming…';
         setPlayIcon(false);
-        // Re-sync will start it back up
         syncOnce();
-      } else if (currentBuffer) {
-        // Was paused — restart with current sync
-        scheduleStart();
+      } else {
+        // Either nothing playing yet, or audio is paused. Either way,
+        // a fresh sync will rebuild and seek correctly.
+        syncOnce();
       }
     };
     muteBtn.onclick = () => {
       isMuted = !isMuted;
+      // Apply to HTML5 audio element (the active playback path).
+      if (htmlAudio) htmlAudio.muted = isMuted;
+      // Also toggle the Web Audio gain node for any legacy code paths
+      // that might still produce sound through it.
       if (gainNode) gainNode.gain.value = isMuted ? 0 : 1;
       muteBtn.style.color = isMuted ? '#ef4444' : 'rgba(255,255,255,0.75)';
       setMuteIcon(isMuted);
@@ -1643,9 +1659,6 @@
       trackStartedAtMs = data.trackStartedAtMs || (Date.now() + clockOffset - (data.elapsedSec * 1000));
       trackDuration = data.durationSec || 0;
       if (typeof data.audioSyncOffsetMs === 'number') audioSyncOffsetMs = data.audioSyncOffsetMs;
-      // Live position for the new track. May be null if plugin hasn't
-      // reported one yet for this sequence; falls back to extrapolation
-      // from trackStartedAtMs in that case.
       livePosition = (data.livePosition && data.livePosition.sequence === data.sequenceName)
         ? data.livePosition : null;
 
@@ -1660,38 +1673,74 @@
 
       stopAudio();
 
-      // ---- Pick stream URL ----
-      // Audio is served exclusively by the ShowPilot proxy, which fetches
-      // bytes from FPP's built-in /api/file/Music/<n> endpoint. There's no
-      // separate "direct" path anymore — we previously had a Node.js audio
-      // daemon running on FPP that this client raced against the proxy, but
-      // it added complexity for a benefit that turned out to be imperceptible
-      // (the proxy adds a few ms over LAN, undetectable in practice).
-      //
-      // We try the same-origin proxy URL first, fall back to the public URL
-      // (absolute, via configured public domain). This handles cases where
-      // the page was loaded from a cached HTML and the origin is briefly
-      // unreachable but the public domain is still up.
+      // ---- HTML5 audio playback (v0.22.0+) ----
+      // We switched away from Web Audio API (decodeAudioData + BufferSource)
+      // because it pushed all timing burden onto each phone independently:
+      // each phone bought its own audio clock, computed its own playback
+      // position, and applied its own corrections — leading to phones
+      // drifting from each OTHER even when each one was correctly synced
+      // to FPP. HTML5 <audio src=...> hands timing to the browser, which
+      // plays back at native 1.0x rate from a Range-seeked start point.
+      // Two phones fetching the same source file at the same wall-clock
+      // moment, seeked to the same position, drift apart only by their
+      // network latency variance (a few tens of ms on LAN) — far better
+      // than the multi-hundred-ms drift we saw with Web Audio scheduling.
       const urlsToTry = [];
       if (data.streamUrl) urlsToTry.push(window.location.origin + data.streamUrl);
       if (data.publicStreamUrl) urlsToTry.push(data.publicStreamUrl);
-
       if (urlsToTry.length === 0) {
         statusEl.textContent = 'No audio source';
         return;
       }
 
       try {
-        statusEl.textContent = 'Downloading…';
-        const arrayBuf = await tryFetchAudio(urlsToTry);
-        if (!arrayBuf) throw new Error('All audio sources failed');
+        // Create a fresh <audio> element each track. Reusing one across
+        // tracks would inherit position/buffering state in subtle ways.
+        // Cheap to create — browsers optimize this.
+        if (htmlAudio) {
+          try { htmlAudio.pause(); htmlAudio.src = ''; htmlAudio.load(); } catch {}
+          htmlAudio = null;
+        }
+        const a = new Audio();
+        a.preload = 'auto';
+        a.crossOrigin = 'anonymous';  // allow Web Audio to tap if we ever need it again
+        a.src = urlsToTry[0];
+        // Apply mute state immediately. The element's `muted` attribute
+        // is independent of `volume` — using `muted` because some phones
+        // pause when volume is exactly 0 (energy-saving heuristic).
+        a.muted = isMuted;
+        a.volume = 1;
+        // Wait for enough data to play. `canplay` fires when the browser
+        // has buffered enough to start without immediately stalling.
+        await new Promise((resolve, reject) => {
+          let settled = false;
+          const onReady = () => { if (!settled) { settled = true; resolve(); } };
+          const onErr = () => { if (!settled) { settled = true; reject(new Error('audio load failed')); } };
+          a.addEventListener('canplay', onReady, { once: true });
+          a.addEventListener('error', onErr, { once: true });
+          // Safety timeout — some browsers are slow on canplay over cellular.
+          // 15s is generous; if data still isn't flowing by then, the user
+          // has connectivity issues and waiting longer won't help.
+          setTimeout(() => { if (!settled) { settled = true; reject(new Error('audio load timeout')); } }, 15000);
+        });
 
-        statusEl.textContent = 'Decoding…';
-        currentBuffer = await audioCtx.decodeAudioData(arrayBuf);
-        statusEl.textContent = 'Syncing…';
-        scheduleStart();
+        // Seek to the current playback position before pressing play.
+        // getExpectedPosition() returns the position we should be at NOW,
+        // accounting for live FPP position (if available) plus the
+        // configured offset for hardware buffer compensation.
+        const targetPos = getExpectedPosition();
+        if (targetPos > 0 && a.duration && targetPos < a.duration) {
+          a.currentTime = targetPos;
+        }
+
+        htmlAudio = a;
+        await a.play();
+        setPlayIcon(true);
+        statusEl.textContent = '';
+        if (audioStartedAtMs === 0) audioStartedAtMs = Date.now();
       } catch (err) {
-        statusEl.textContent = 'Load failed: ' + err.message;
+        statusEl.textContent = 'Load failed: ' + (err.message || err);
+        console.warn('[ShowPilot] HTML5 audio load failed:', err);
       }
     }
 
@@ -1843,6 +1892,11 @@
         try { currentSourceGain.disconnect(); } catch {}
         currentSourceGain = null;
       }
+      if (htmlAudio) {
+        try { htmlAudio.pause(); } catch {}
+        try { htmlAudio.src = ''; htmlAudio.load(); } catch {}
+        htmlAudio = null;
+      }
       // Clear drift anchors so updateDriftDisplay() bails until the
       // next track schedules new ones. Without this, the display would
       // keep drawing using stale anchors after stop().
@@ -1855,6 +1909,7 @@
       integratedPlayedSec = 0;
       lastIntegrationTime = 0;
       lastCrossfadeAtCtx = 0;
+      lastReseekAtMs = 0;
     }
 
     // If the audio gate fires during playback (e.g. user walked outside the
@@ -1885,35 +1940,15 @@
     //     to travel — usually negligible, but two devices on opposite
     //     sides of a room can be 30-40ms apart just from physics)
     function updateDriftDisplay() {
-      if (!currentSource || !audioCtx || !trackStartedAtMs || !trackScheduledAtAudioCtx) {
+      // HTML5 audio path: compare element's currentTime to expected.
+      // If we have no element or it's not far enough into playback to
+      // measure meaningfully, clear the display and bail.
+      if (!htmlAudio || htmlAudio.paused || !currentSequence) {
         if (driftEl) driftEl.textContent = '';
         return;
       }
-      // Integrate playback position. Since the last drift tick, real time
-      // has advanced by (now - lastIntegrationTime) seconds. During that
-      // span, the audio file's playback position advanced by that amount
-      // multiplied by the rate we WERE applying (lastAppliedRate). This
-      // is the only correct way to compute file position when rate varies.
-      const now = audioCtx.currentTime;
-      const realDt = now - lastIntegrationTime;
-      if (realDt > 0) {
-        integratedPlayedSec += realDt * lastAppliedRate;
-        lastIntegrationTime = now;
-      }
-      // actualPosition is the file position currently emitting from the
-      // speaker. Subtract output latency: "the sample HEARD now was
-      // scheduled outputLatency seconds ago, so the file position emitted
-      // now corresponds to a slightly earlier point."
-      const actualPosition = integratedPlayedSec - trackScheduledOutputLatency;
-
-      // Where SHOULD it be? Use the same helper that scheduleStart
-      // uses — preferring live FPP-reported position when available,
-      // falling back to extrapolation. Without this consistency the
-      // drift calculation would compute against a different target
-      // than what scheduling aimed at.
+      const actualPosition = htmlAudio.currentTime;
       const expectedPosition = getExpectedPosition();
-
-      // Drift in seconds. Positive = audio AHEAD of where it should be.
       const drift = actualPosition - expectedPosition;
       const ms = Math.round(drift * 1000);
       driftEl.textContent = '· ' + (ms >= 0 ? '+' : '') + ms + 'ms';
@@ -1921,136 +1956,48 @@
       const absMs = Math.abs(ms);
       driftEl.style.color = absMs < 100 ? '#4ade80' : (absMs < 500 ? '#fb923c' : '#ef4444');
 
-      // ---- Auto-sync via crossfade jump-cut ----
+      // ---- Auto-correction via re-seek ----
+      // HTML5 audio doesn't support smooth crossfade between sources
+      // the way Web Audio did. The simplest correction is to set
+      // currentTime directly when drift exceeds a generous threshold.
+      // This produces a tiny audible blip (browser handles a brief
+      // re-buffer) but it's preferable to letting drift accumulate.
       //
-      // Replaces continuous playback rate adjustment, which had two
-      // problems: (1) accumulating math errors when rate * time
-      // integration was even slightly off, causing slow runaway drift,
-      // and (2) audible pitch shifts during corrections.
-      //
-      // The new approach: when smoothed drift exceeds the threshold,
-      // we kill the current source with a fast fade-out and start a
-      // brand-new source at the corrected position with a fade-in.
-      // The crossfade is short enough (~40ms) that listeners don't
-      // perceive it as a discontinuity, but the position snaps to
-      // truth instantly. Same pattern Sonos / multi-room audio uses.
-      //
-      // Throttling: we won't run another correction for several seconds
-      // after one fires. Without throttle, jitter near the threshold
-      // would chain crossfades back-to-back, sounding awful and never
-      // actually converging.
+      // Tolerance is more generous than the Web Audio version because:
+      // (1) every re-seek is audibly noticeable as a small pop, and
+      // (2) HTML5 audio plays at native rate without rate jitter, so
+      // small drift values tend to stay small instead of growing. We
+      // expect this to fire rarely — mostly on track-start before live
+      // position has been received, or after device sleep.
       driftHistory.push(drift);
       if (driftHistory.length > DRIFT_HISTORY_SIZE) driftHistory.shift();
       if (driftHistory.length < DRIFT_HISTORY_SIZE) return;
 
       const avgDrift = driftHistory.reduce((a, b) => a + b, 0) / driftHistory.length;
       const avgDriftMs = Math.abs(avgDrift) * 1000;
+      const RESEEK_THRESHOLD_MS = 500;
+      if (avgDriftMs < RESEEK_THRESHOLD_MS) return;
 
-      // Threshold tuning notes:
-      //   - 200ms is well above per-tick jitter (~50-100ms) so we don't
-      //     trigger on noise.
-      //   - 200ms is close to the perception threshold for music sync
-      //     vs. a separate audio source (i.e. listeners start to notice).
-      //   - PulseMesh logs we observed showed corrections happening at
-      //     ~700ms, suggesting their threshold may be even higher. We're
-      //     more aggressive — better tight sync, accepting more frequent
-      //     correction events.
-      const CORRECTION_THRESHOLD_MS = 200;
-      if (avgDriftMs < CORRECTION_THRESHOLD_MS) return;
+      // Throttle: don't re-seek more than once every 8 seconds.
+      const RESEEK_THROTTLE_SEC = 8;
+      const nowMs = Date.now();
+      if (lastReseekAtMs > 0 && (nowMs - lastReseekAtMs) < RESEEK_THROTTLE_SEC * 1000) return;
 
-      // Throttle: don't crossfade more than once every N seconds. Gives
-      // the audio engine time to stabilize after the previous correction
-      // and prevents thrashing if jitter spans the threshold.
-      const CROSSFADE_THROTTLE_SEC = 5;
-      const nowCtx = audioCtx.currentTime;
-      if (lastCrossfadeAtCtx > 0 && (nowCtx - lastCrossfadeAtCtx) < CROSSFADE_THROTTLE_SEC) return;
-
-      // Compute the corrected file position — where we SHOULD be right
-      // now according to the server. The new source will start playing
-      // from this offset, with a small lead-in to allow scheduling.
-      const correctionLeadInSec = 0.04;  // ~40ms ahead of "now"
-      const newSourceStartWhen = nowCtx + correctionLeadInSec;
-      // expectedPosition is "where we should be now"; add the lead-in
-      // so when the new source actually starts playing, it's at the
-      // right spot for THAT moment.
-      const newSourceStartOffset = Math.max(0, expectedPosition + correctionLeadInSec);
-
-      // If the corrected position is past the end of the buffer, the
-      // track is essentially over. Don't crossfade — let the natural
-      // track-change flow handle it.
-      if (!currentBuffer || newSourceStartOffset >= currentBuffer.duration - 0.1) return;
+      // Don't seek past end of track.
+      if (htmlAudio.duration && expectedPosition >= htmlAudio.duration - 0.1) return;
+      if (expectedPosition < 0) return;
 
       try {
-        // Build the new source + gain (start at 0, ramp up).
-        const newGain = audioCtx.createGain();
-        newGain.gain.value = 0;
-        newGain.connect(gainNode);
-        const newSrc = audioCtx.createBufferSource();
-        newSrc.buffer = currentBuffer;
-        newSrc.connect(newGain);
-        // Schedule new source's gain ramp: 0 → 1 over the crossfade window
-        const fadeMs = 40;
-        const fadeSec = fadeMs / 1000;
-        newGain.gain.setValueAtTime(0, newSourceStartWhen);
-        newGain.gain.linearRampToValueAtTime(1, newSourceStartWhen + fadeSec);
-        // Start playback at corrected position
-        newSrc.start(newSourceStartWhen, newSourceStartOffset);
-        newSrc.onended = () => {
-          if (currentSource === newSrc) { currentSource = null; setPlayIcon(false); }
-        };
-
-        // Schedule the OLD source's gain ramp: 1 → 0 over the same window
-        const oldSrc = currentSource;
-        const oldGain = currentSourceGain;
-        if (oldGain) {
-          // Cancel any pending gain automation so our new ramp wins.
-          oldGain.gain.cancelScheduledValues(nowCtx);
-          oldGain.gain.setValueAtTime(oldGain.gain.value, newSourceStartWhen);
-          oldGain.gain.linearRampToValueAtTime(0, newSourceStartWhen + fadeSec);
-        }
-        // Stop+disconnect the old source AFTER the fade completes.
-        // Using setTimeout against wall time + a tiny safety margin
-        // since AudioContext doesn't expose a direct "run callback at
-        // audio time T" API. We accept ~5-10ms of slop here; the gain
-        // is 0 by then so listener can't hear anything anyway.
-        const cleanupDelayMs = (correctionLeadInSec + fadeSec) * 1000 + 20;
-        setTimeout(() => {
-          if (oldSrc) {
-            try { oldSrc.stop(); } catch {}
-            try { oldSrc.disconnect(); } catch {}
-          }
-          if (oldGain) {
-            try { oldGain.disconnect(); } catch {}
-          }
-        }, cleanupDelayMs);
-
-        // Update tracking pointers to the NEW source. Drift integration
-        // restarts from the corrected position. This is the "snap" — by
-        // the time the next drift tick fires, integratedPlayedSec is
-        // freshly anchored at expectedPosition (modulo lead-in), and
-        // drift will read near zero.
-        currentSource = newSrc;
-        currentSourceGain = newGain;
-        trackScheduledAtAudioCtx = newSourceStartWhen;
-        trackScheduledAtPositionSec = newSourceStartOffset;
-        integratedPlayedSec = newSourceStartOffset;
-        lastIntegrationTime = newSourceStartWhen;
-        lastCrossfadeAtCtx = nowCtx;
-        // Clear the drift history so the next averaging window is built
-        // fresh from post-correction samples (mixing pre- and post-
-        // correction drift values would average toward zero artificially
-        // and could suppress a follow-up correction that's actually needed).
+        htmlAudio.currentTime = expectedPosition;
+        lastReseekAtMs = nowMs;
         driftHistory.length = 0;
-
-        // Diagnostic log — kept low-volume so it's not noisy in normal
-        // operation. Useful for verifying corrections are happening.
         if (typeof console !== 'undefined' && console.info) {
-          console.info('[ShowPilot] sync correction:',
+          console.info('[ShowPilot] sync correction (re-seek):',
             'drift was', Math.round(avgDriftMs), 'ms,',
-            'snapped to position', newSourceStartOffset.toFixed(3), 's');
+            'snapped to', expectedPosition.toFixed(3), 's');
         }
       } catch (err) {
-        console.warn('[ShowPilot] crossfade correction failed:', err);
+        console.warn('[ShowPilot] re-seek failed:', err);
       }
     }
 
