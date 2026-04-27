@@ -182,6 +182,10 @@ router.put('/config', requireAdmin, (req, res) => {
     'audio_gate_radius_miles',
     'audio_sync_offset_ms',
     'viewer_source_obfuscate',
+    'pwa_admin_enabled',
+    'pwa_viewer_enabled',
+    'pwa_viewer_name',
+    'pwa_viewer_icon',
   ];
   const updates = {};
   for (const k of allowed) {

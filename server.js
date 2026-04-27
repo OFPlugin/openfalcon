@@ -95,6 +95,106 @@ app.use('/api/admin', require('./routes/admin'));
 // Public viewer API
 app.use('/api', require('./routes/viewer'));
 
+// ============================================================
+// PWA install support (v0.23.0+)
+// ============================================================
+// Browsers look for /manifest.json (or one referenced via
+// <link rel="manifest">) and /sw.js (service worker) at predictable
+// paths. We expose three: /admin-manifest.json, /viewer-manifest.json,
+// and /sw.js. The HTML pages reference whichever manifest applies.
+//
+// All three are gated by per-show config so installs only become
+// available when the admin opts in. Admin uses fixed branding;
+// viewer is configurable.
+
+// Minimal service worker — required for install eligibility but
+// doesn't actively cache anything. We could expand this later for
+// offline support, but ShowPilot fundamentally requires a server
+// connection to function (live position, voting, queue), so offline
+// caching has limited value.
+const PWA_SERVICE_WORKER = `
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', () => {/* pass through */});
+`;
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.send(PWA_SERVICE_WORKER);
+});
+
+app.get('/admin-manifest.json', (req, res) => {
+  const { getConfig } = require('./lib/db');
+  const cfg = getConfig();
+  if (cfg.pwa_admin_enabled !== 1) {
+    return res.status(404).send('Admin PWA install not enabled');
+  }
+  res.setHeader('Content-Type', 'application/manifest+json');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.json({
+    name: 'ShowPilot Admin',
+    short_name: 'ShowPilot',
+    start_url: '/admin/',
+    scope: '/admin/',
+    display: 'standalone',
+    background_color: '#0a0a0a',
+    theme_color: '#0a0a0a',
+    icons: [
+      // ShowPilot's bundled favicon. Points to /favicon.ico which Express
+      // serves from public/. Browsers will scale this for various display
+      // contexts; quality on small icons is fine since favicons are
+      // typically 32-256px source size.
+      { src: '/favicon.ico', sizes: 'any', type: 'image/x-icon' },
+    ],
+  });
+});
+
+app.get('/viewer-manifest.json', (req, res) => {
+  const { getConfig } = require('./lib/db');
+  const cfg = getConfig();
+  if (cfg.pwa_viewer_enabled !== 1) {
+    return res.status(404).send('Viewer PWA install not enabled');
+  }
+  // App name: configured value, falling back to show name, falling back
+  // to a generic. show_name defaults to "My Light Show" so this almost
+  // always has SOMETHING reasonable to display.
+  const name = (cfg.pwa_viewer_name && cfg.pwa_viewer_name.trim())
+    || cfg.show_name
+    || 'Light Show';
+  // Icon: configured data URL, falling back to favicon. data: URLs work
+  // in manifests on most browsers (Chrome, Safari, Edge); the fallback
+  // ensures a manifest is always valid even if the user hasn't uploaded
+  // an icon yet.
+  const iconSrc = (cfg.pwa_viewer_icon && cfg.pwa_viewer_icon.trim())
+    || '/favicon.ico';
+  // For data: URLs we infer type from the prefix; otherwise default to
+  // png since that's what we'll guide users to upload.
+  let iconType = 'image/png';
+  if (iconSrc.startsWith('data:')) {
+    const m = iconSrc.match(/^data:([^;]+);/);
+    if (m) iconType = m[1];
+  } else if (iconSrc.endsWith('.ico')) {
+    iconType = 'image/x-icon';
+  }
+  res.setHeader('Content-Type', 'application/manifest+json');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.json({
+    name,
+    short_name: name.length > 12 ? name.slice(0, 12) : name,
+    start_url: '/',
+    scope: '/',
+    display: 'standalone',
+    background_color: '#000000',
+    theme_color: '#000000',
+    icons: [
+      // Single icon entry with sizes='any'. Browsers downscale as needed.
+      // PNG/ICO will both render fine; for sharp icons at small sizes
+      // users should provide a 512x512 or larger source.
+      { src: iconSrc, sizes: 'any', type: iconType, purpose: 'any' },
+    ],
+  });
+});
+
 // Viewer page at root — renders the active template through the RF-compatible renderer.
 app.get('/', (req, res) => {
   try {
