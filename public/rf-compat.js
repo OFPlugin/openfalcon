@@ -1250,10 +1250,15 @@
         try {
           if (window.io) {
             const audioSock = window.io();
+            console.log('[ShowPilot] socket.io created, connected:', audioSock.connected);
+            audioSock.on('connect', () => {
+              console.log('[ShowPilot] socket connected');
+            });
+            audioSock.on('disconnect', () => {
+              console.log('[ShowPilot] socket disconnected');
+            });
             audioSock.on('positionUpdate', (msg) => {
-              // Only accept updates for the sequence we think is playing.
-              // Stale updates from a previous track would corrupt sync
-              // for the new one.
+              console.log('[ShowPilot] positionUpdate received:', msg, 'currentSequence:', currentSequence);
               if (!msg || !msg.sequence) return;
               if (currentSequence && msg.sequence !== currentSequence) return;
               livePosition = {
@@ -1262,6 +1267,8 @@
                 updatedAt: msg.updatedAt,
               };
             });
+          } else {
+            console.warn('[ShowPilot] window.io not available — live position disabled');
           }
         } catch (e) {
           console.warn('[ShowPilot] could not subscribe to position updates:', e);
@@ -1677,11 +1684,32 @@
       const offsetSec = audioSyncOffsetMs / 1000;
       if (livePosition && livePosition.sequence === currentSequence) {
         const elapsedSinceUpdate = (Date.now() - livePosition.updatedAt) / 1000;
-        return livePosition.position + elapsedSinceUpdate - offsetSec;
+        const result = livePosition.position + elapsedSinceUpdate - offsetSec;
+        // Diagnostic — log occasionally so we can see this path is firing.
+        // Only log every 10th call to avoid spamming.
+        if (!getExpectedPosition._logCount) getExpectedPosition._logCount = 0;
+        getExpectedPosition._logCount++;
+        if (getExpectedPosition._logCount % 10 === 1) {
+          console.log('[ShowPilot] getExpectedPosition LIVE:',
+            'livePos.position=', livePosition.position,
+            'updatedAt age (ms)=', Math.round(Date.now() - livePosition.updatedAt),
+            'result=', result.toFixed(3));
+        }
+        return result;
       }
       // Fallback: extrapolate from track-start anchor
       const serverNow = Date.now() + clockOffset;
-      return (serverNow - trackStartedAtMs) / 1000 - offsetSec;
+      const result = (serverNow - trackStartedAtMs) / 1000 - offsetSec;
+      if (!getExpectedPosition._fallbackLogCount) getExpectedPosition._fallbackLogCount = 0;
+      getExpectedPosition._fallbackLogCount++;
+      if (getExpectedPosition._fallbackLogCount % 10 === 1) {
+        console.log('[ShowPilot] getExpectedPosition FALLBACK:',
+          'no livePosition or sequence mismatch.',
+          'livePosition=', livePosition,
+          'currentSequence=', currentSequence,
+          'result=', result.toFixed(3));
+      }
+      return result;
     }
 
     // ---- Schedule playback at sample-precise position ----
