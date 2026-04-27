@@ -1487,7 +1487,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.24.4</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.24.5</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1873,7 +1873,7 @@
 
             <div id="designerEditorWrap">
               <div class="row" style="margin-bottom: 0.5rem; align-items: center;">
-                <input type="text" id="tplName" placeholder="Template name" style="flex: 1; margin: 0;" />
+                <input type="text" id="tplName" placeholder="Template name" style="flex: 1; margin: 0;" oninput="onTemplateNameInput()" />
                 <span id="tplMeta" class="muted"></span>
                 <span id="tplDraftBadge" class="of-tpl-status of-tpl-status-saved">SAVED</span>
                 <button class="secondary of-tpl-bypass-lock" id="tplLockBtn" onclick="toggleTemplateLock()" title="Lock to prevent accidental edits">🔓 Lock</button>
@@ -5281,6 +5281,24 @@
       // Mark as dirty so Save Changes button activates
       hasDraft = true;
       updateDraftButtons();
+    }
+
+    // Renaming the template marks the editor dirty. Without this, typing in
+    // the name field never enabled the Save button — saveDesignerChanges()
+    // POSTs the name to the server, but only when invoked from the Save
+    // button which was greyed out because hasDraft was still false.
+    function onTemplateNameInput() {
+      if (!selectedTplId) return;
+      // Only flag dirty if the name actually differs from what's loaded.
+      // Avoids enabling Save when the user clicks into the field and tabs
+      // away without changing anything.
+      const tpl = (templates || []).find(t => t.id === selectedTplId);
+      const original = tpl ? (tpl.name || '') : '';
+      const current = document.getElementById('tplName').value;
+      if (current !== original) {
+        hasDraft = true;
+        updateDraftButtons();
+      }
     }
 
     function clearFavicon() {
