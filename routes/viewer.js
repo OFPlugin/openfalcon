@@ -469,6 +469,29 @@ router.get('/now-playing-audio', (req, res) => {
     // Timestamp-anchored sync — Web Audio API uses these for sample-precise scheduling
     trackStartedAtMs: startedAtMs,
     serverNowMs: Date.now(),
+    // Live position from FPP's reported playback. If the plugin is
+    // sending /api/plugin/position updates, this reflects FPP's actual
+    // hardware audio output position within the last ~500ms. Viewers
+    // use this as an authoritative anchor instead of extrapolating from
+    // trackStartedAtMs (which has whatever offset was baked in at
+    // track-change time, drifting from FPP's true position over the
+    // course of a track). Null if no live position has been reported
+    // since server startup or the reported sequence doesn't match.
+    livePosition: (() => {
+      try {
+        const { getLivePosition } = require('./plugin');
+        const lp = getLivePosition && getLivePosition();
+        if (lp && lp.sequence === np.sequence_name) {
+          return {
+            position: lp.position,
+            updatedAt: lp.updatedAt,
+          };
+        }
+      } catch (e) {
+        // If the require fails for any reason, just omit live position.
+      }
+      return null;
+    })(),
     // Audio is served via the ShowPilot proxy, which fetches bytes from
     // FPP's built-in /api/file/Music/<name> endpoint. Same-origin path always
     // works; the public URL is for cellular/external listeners hitting through

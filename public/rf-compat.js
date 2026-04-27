@@ -1032,6 +1032,23 @@
     let trackStartedAtMs = 0;     // when this track started on server (server epoch)
     let trackDuration = 0;        // total length in seconds
     let audioSyncOffsetMs = 0;    // per-show offset to compensate for FPP audio output latency vs cache delivery speed. Server sends this; positive = audio plays LATER (compensates for too-early arrival)
+
+    // Live position from FPP. When the plugin is running >= 0.11.0, it
+    // pushes "FPP is at position X.Y as of timestamp T" updates every
+    // ~500ms via socket.io. We use this as the authoritative anchor for
+    // playback sync — it reflects FPP's actual hardware audio output
+    // position, including buffer delay, so phones aligning to it
+    // naturally match what the speakers are emitting.
+    //
+    // This replaces extrapolating from trackStartedAtMs, which has
+    // whatever bias was baked in at track-change time and stays put
+    // for the whole track regardless of how FPP's actual playback
+    // progresses. Live position is fresh by definition.
+    //
+    // Shape: { sequence, position, updatedAt } or null if no update yet.
+    // The viewer subscribes to 'positionUpdate' socket events to keep
+    // this fresh; initial value comes from now-playing-audio response.
+    let livePosition = null;
     let lastSyncResponse = null;  // raw response for debugging
     let pollTimer = null;
     let driftTimer = null;
@@ -1223,6 +1240,32 @@
         pollTimer = setInterval(syncOnce, 1000);
         // Drift correction loop (cheap — just compares client clock to expected)
         driftTimer = setInterval(updateDriftDisplay, 250);
+
+        // Subscribe to live position updates from the server. The plugin
+        // pushes "FPP is at position X.Y" via /api/plugin/position; the
+        // server relays as a socket.io 'positionUpdate' event. We update
+        // our anchor each time, giving us near-real-time speaker-accurate
+        // sync without polling overhead. socket.io is shared with the
+        // outer (queue/voting) scope; window.io() returns a singleton.
+        try {
+          if (window.io) {
+            const audioSock = window.io();
+            audioSock.on('positionUpdate', (msg) => {
+              // Only accept updates for the sequence we think is playing.
+              // Stale updates from a previous track would corrupt sync
+              // for the new one.
+              if (!msg || !msg.sequence) return;
+              if (currentSequence && msg.sequence !== currentSequence) return;
+              livePosition = {
+                sequence: msg.sequence,
+                position: msg.position,
+                updatedAt: msg.updatedAt,
+              };
+            });
+          }
+        } catch (e) {
+          console.warn('[ShowPilot] could not subscribe to position updates:', e);
+        }
 
         // ============================================================
         // Audio gate — continuous proximity enforcement (v0.18.15+)
@@ -1502,6 +1545,13 @@
           if (data.trackStartedAtMs) trackStartedAtMs = data.trackStartedAtMs;
           if (data.durationSec) trackDuration = data.durationSec;
           if (typeof data.audioSyncOffsetMs === 'number') audioSyncOffsetMs = data.audioSyncOffsetMs;
+          // Refresh live position from response — covers the case where
+          // the socket connection is down or hasn't pushed an update
+          // since this poll arrived. Only accept if it matches our
+          // current sequence (defensive against race-condition stale data).
+          if (data.livePosition && data.livePosition.sequence === currentSequence) {
+            livePosition = data.livePosition;
+          }
           // Refresh metadata in case admin changed it
           if (data.imageUrl && coverEl.src !== data.imageUrl) coverEl.src = data.imageUrl;
 
@@ -1522,6 +1572,11 @@
       trackStartedAtMs = data.trackStartedAtMs || (Date.now() + clockOffset - (data.elapsedSec * 1000));
       trackDuration = data.durationSec || 0;
       if (typeof data.audioSyncOffsetMs === 'number') audioSyncOffsetMs = data.audioSyncOffsetMs;
+      // Live position for the new track. May be null if plugin hasn't
+      // reported one yet for this sequence; falls back to extrapolation
+      // from trackStartedAtMs in that case.
+      livePosition = (data.livePosition && data.livePosition.sequence === data.sequenceName)
+        ? data.livePosition : null;
 
       titleEl.textContent = data.displayName || data.sequenceName;
       artistEl.textContent = data.artist || '';
@@ -1586,25 +1641,59 @@
       throw lastErr || new Error('No URLs to try');
     }
 
+    // Compute the expected current playback position. This is the
+    // single source of truth for "where SHOULD audio be right now."
+    //
+    // Two paths:
+    //
+    // 1. Live position (preferred) — when the plugin has pushed a
+    //    recent FPP playback position via /api/plugin/position. The
+    //    update has a server timestamp; we extrapolate forward from
+    //    that point at native rate. Since this position came directly
+    //    from FPP's seconds_played, it reflects what FPP's hardware
+    //    audio output is actually doing, including buffer delay. Phones
+    //    aligning to this number naturally match the speakers.
+    //
+    // 2. Track-start extrapolation (fallback) — older plugin or initial
+    //    bootstrap before any position update has arrived. Uses the
+    //    fixed trackStartedAtMs anchor and assumes audio has been
+    //    progressing at native rate ever since. Less accurate over time
+    //    because trackStartedAtMs is stamped at FPP's "I'm starting
+    //    playback now" event, which precedes hardware audio emission
+    //    by the FPP buffer delay (~200ms typical).
+    //
+    // The audioSyncOffsetMs adjustment is applied in BOTH paths but
+    // serves different roles:
+    //  - Path 1: usually 0 — FPP's seconds_played already accounts for
+    //    its hardware audio path, so listeners hearing speakers will
+    //    naturally match phone playback. Offset can still be used to
+    //    deliberately bias if needed.
+    //  - Path 2: typically positive — compensates for the buffer delay
+    //    not reflected in trackStartedAtMs.
+    //
+    // Returns position in seconds. Caller decides what to do if value
+    // is past the buffer duration (track ended).
+    function getExpectedPosition() {
+      const offsetSec = audioSyncOffsetMs / 1000;
+      if (livePosition && livePosition.sequence === currentSequence) {
+        const elapsedSinceUpdate = (Date.now() - livePosition.updatedAt) / 1000;
+        return livePosition.position + elapsedSinceUpdate - offsetSec;
+      }
+      // Fallback: extrapolate from track-start anchor
+      const serverNow = Date.now() + clockOffset;
+      return (serverNow - trackStartedAtMs) / 1000 - offsetSec;
+    }
+
     // ---- Schedule playback at sample-precise position ----
     function scheduleStart() {
       if (!currentBuffer || !audioCtx) return;
       stopAudio();
 
-      // Where should we be in the track right now (server time)?
-      // We also subtract the configured audio-sync offset:
-      //   positive offset = "play audio LATER" (because audio was arriving
-      //                      ahead of the lights — typical case after the
-      //                      cache change, since cache is faster than the
-      //                      old FPP-proxy path)
-      //   negative offset = "play audio EARLIER"
-      // Subtracting offset/1000 from positionSec means we believe we're
-      // less far through the track than wall-clock suggests, so the
-      // playback start_offset is smaller, and the audio plays from an
-      // earlier point in the file — which the listener experiences as
-      // "audio arrived later" relative to wherever it would have been.
-      const serverNow = Date.now() + clockOffset;
-      const positionSec = (serverNow - trackStartedAtMs) / 1000 - (audioSyncOffsetMs / 1000);
+      // Where should we be in the track right now? Defer to
+      // getExpectedPosition, which prefers live FPP-reported position
+      // (speaker-accurate) and falls back to track-start extrapolation
+      // (with offset applied) when no live position is available.
+      const positionSec = getExpectedPosition();
 
       // If already past the end, skip — next sync will pick up new track
       if (positionSec >= currentBuffer.duration) {
@@ -1746,12 +1835,12 @@
       // now corresponds to a slightly earlier point."
       const actualPosition = integratedPlayedSec - trackScheduledOutputLatency;
 
-      // Where SHOULD it be per server time?
-      // The audioSyncOffsetMs adjusts the target — positive means we
-      // want audio to lag the wall clock by that much, so the "expected"
-      // position on the audio clock is correspondingly earlier.
-      const serverNow = Date.now() + clockOffset;
-      const expectedPosition = (serverNow - trackStartedAtMs) / 1000 - (audioSyncOffsetMs / 1000);
+      // Where SHOULD it be? Use the same helper that scheduleStart
+      // uses — preferring live FPP-reported position when available,
+      // falling back to extrapolation. Without this consistency the
+      // drift calculation would compute against a different target
+      // than what scheduling aimed at.
+      const expectedPosition = getExpectedPosition();
 
       // Drift in seconds. Positive = audio AHEAD of where it should be.
       const drift = actualPosition - expectedPosition;

@@ -5,7 +5,8 @@
 //
 // Endpoints:
 //   GET  /api/plugin/state            — one call, returns everything FPP needs to act
-//   POST /api/plugin/playing          — FPP reports what's playing now
+//   POST /api/plugin/playing          — FPP reports what's playing now (track-change edge)
+//   POST /api/plugin/position         — FPP reports live playback position (every ~500ms)
 //   POST /api/plugin/next             — FPP reports what's scheduled next
 //   POST /api/plugin/heartbeat        — keepalive + plugin version sync
 //   POST /api/plugin/sync-sequences   — plugin pushes the full sequence list
@@ -25,6 +26,23 @@ const {
   advanceVotingRound,
   db,
 } = require('../lib/db');
+
+// Live playback position from FPP. Updated by POST /api/plugin/position
+// roughly twice per second. In-memory only — no need to persist; if the
+// server restarts, the next plugin tick refreshes it.
+//
+// Shape: { sequence: 'Ghostbusters', position: 14.27, updatedAt: 1234567890123 }
+// updatedAt is server-side Date.now() at receipt — used by viewers to
+// extrapolate "where IS the track now" by adding (now - updatedAt) to
+// position. Network latency between plugin and server gets baked into
+// updatedAt; this is fine because both ends of the calculation use
+// server-side timestamps so they cancel.
+let livePosition = null;
+
+// Exported so other modules (routes/viewer.js) can read latest position.
+function getLivePosition() {
+  return livePosition;
+}
 
 // Bearer token auth
 function requireBearerToken(req, res, next) {
@@ -265,6 +283,52 @@ router.post('/playing', (req, res) => {
   const io = req.app.get('io');
   if (io) io.emit('nowPlaying', { sequenceName: name || null });
 
+  res.json({ ok: true });
+});
+
+// ============================================================
+// POST /api/plugin/position
+// Plugin reports FPP's live playback position. Called every ~500ms
+// while audio is playing. Updates in-memory livePosition and pushes
+// to all viewer clients via socket.io for near-real-time sync.
+//
+// This is the new high-cadence position channel. The /playing
+// endpoint stays for track-change events (which establish the
+// initial anchor for new sequences); /position keeps the position
+// fresh during a track. Both can fire — they don't conflict.
+//
+// Body: { sequence: string, position: number }
+// ============================================================
+router.post('/position', (req, res) => {
+  const { sequence, position } = req.body || {};
+  const name = (sequence || '').trim();
+  const pos = (typeof position === 'number' && isFinite(position) && position >= 0)
+    ? position : null;
+
+  if (!name || pos === null) {
+    return res.status(400).json({ error: 'invalid payload' });
+  }
+
+  // Stamp arrival time using server clock. Viewers will use this to
+  // extrapolate forward: actualPosition = position + (now - updatedAt) / 1000
+  livePosition = {
+    sequence: name,
+    position: pos,
+    updatedAt: Date.now(),
+  };
+
+  // Emit to all connected viewers. They'll use this as the freshest
+  // anchor for sync — replaces extrapolating from a stale started_at.
+  const io = req.app.get('io');
+  if (io) {
+    io.emit('positionUpdate', {
+      sequence: name,
+      position: pos,
+      updatedAt: livePosition.updatedAt,
+    });
+  }
+
+  // Plugin doesn't care about response body — just status.
   res.json({ ok: true });
 });
 
@@ -617,3 +681,4 @@ router.post('/audio-cache/prune', (req, res) => {
 
 module.exports = router;
 module.exports.pluginStatus = pluginStatus;
+module.exports.getLivePosition = getLivePosition;
