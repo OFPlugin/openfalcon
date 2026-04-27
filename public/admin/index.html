@@ -1501,7 +1501,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.25.0</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.25.1</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -3080,27 +3080,28 @@
         `;
       }
 
-      // Secrets toggle (separate from sections)
+      // Secrets toggle (separate from sections).
+      // Pre-compute the paragraph text and the radio-buttons HTML separately
+      // so the template literal doesn't have a multi-line ternary inside a
+      // ${...} substitution — that pattern was causing parse errors in some
+      // browser configurations even though Node parses it fine.
+      const secretsExplain = summary.hasConfigJs
+        ? "The backup includes the source instance's jwtSecret + showToken. Restoring these will log out all admin sessions, invalidate the current FPP plugin's connection, and require a server restart. Use this when migrating to a new server."
+        : "The backup does not include a config.js — secrets cannot be restored.";
+      const secretsRadios = summary.hasConfigJs
+        ? '<div style="display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.9rem;">'
+          + '<label style="display:flex; align-items:center; gap: 0.3rem; margin: 0; cursor: pointer;">'
+          + '<input type="radio" name="policy_secrets" value="replace" style="width: auto; margin: 0;" />'
+          + 'Replace (will trigger server restart)</label>'
+          + '<label style="display:flex; align-items:center; gap: 0.3rem; margin: 0; cursor: pointer;">'
+          + '<input type="radio" name="policy_secrets" value="keep" checked style="width: auto; margin: 0;" />'
+          + 'Keep current secrets</label></div>'
+        : '';
       const secretsHtml = `
         <div class="row" style="display: block; padding: 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 0.5rem;">
           <div><strong>Secrets (config.js)</strong></div>
-          <p class="muted" style="font-size: 0.85rem; margin: 0.3rem 0 0.5rem;">
-            ${summary.hasConfigJs
-              ? 'The backup includes the source instance\\'s jwtSecret + showToken. Restoring these will log out all admin sessions, invalidate the current FPP plugin\\'s connection, and require a server restart. Use this when migrating to a new server.'
-              : 'The backup does not include a config.js — secrets cannot be restored.'}
-          </p>
-          ${summary.hasConfigJs ? `
-            <div style="display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.9rem;">
-              <label style="display:flex; align-items:center; gap: 0.3rem; margin: 0; cursor: pointer;">
-                <input type="radio" name="policy_secrets" value="replace" style="width: auto; margin: 0;" />
-                Replace (will trigger server restart)
-              </label>
-              <label style="display:flex; align-items:center; gap: 0.3rem; margin: 0; cursor: pointer;">
-                <input type="radio" name="policy_secrets" value="keep" checked style="width: auto; margin: 0;" />
-                Keep current secrets
-              </label>
-            </div>
-          ` : ''}
+          <p class="muted" style="font-size: 0.85rem; margin: 0.3rem 0 0.5rem;">${secretsExplain}</p>
+          ${secretsRadios}
         </div>
       `;
 
@@ -3171,10 +3172,10 @@
 
       let warning = 'Apply this restore? This action cannot be undone.';
       if (policies.secrets === 'replace') {
-        warning += '\\n\\nThe server will RESTART after restore (secrets changed). All admin sessions will end. You\\'ll need to log in with credentials from the backup.';
+        warning += "\n\nThe server will RESTART after restore (secrets changed). All admin sessions will end. You'll need to log in with credentials from the backup.";
       }
       if (Object.values(policies).some(p => p === 'replace')) {
-        warning += '\\n\\nReplace mode wipes destination data for those sections.';
+        warning += '\n\nReplace mode wipes destination data for those sections.';
       }
       const ok = await showConfirm(warning, { okLabel: 'Restore', danger: true });
       if (!ok) return;
@@ -3193,23 +3194,36 @@
           throw new Error(data.error || ('HTTP ' + r.status));
         }
         const result = data.result;
-        let msg = 'Restore complete.\\n\\n';
+        let msg = 'Restore complete.\n\n';
         for (const [section, count] of Object.entries(result.restored)) {
-          if (count > 0) msg += `• ${section}: ${count} rows\\n`;
+          if (count > 0) msg += `• ${section}: ${count} rows\n`;
         }
-        if (result.coverArtRestored > 0) msg += `• cover art: ${result.coverArtRestored} files\\n`;
+        if (result.coverArtRestored > 0) msg += `• cover art: ${result.coverArtRestored} files\n`;
         if (result.requiresRestart) {
-          msg += '\\nServer is restarting now (secrets changed). The page will become unresponsive briefly. Reload after a few seconds and log in with credentials from the backup.';
+          if (result.willAutoRestart) {
+            msg += '\n⚠ Server is restarting now (secrets changed). The page will become unresponsive briefly. Reload after a few seconds and log in with credentials from the backup.';
+          } else {
+            // Manual restart required — supervisor not detected
+            msg += '\n⚠ Server restart REQUIRED — secrets are written to config.js but the running process still has the old jwtSecret in memory until you restart.';
+            if (result.manualRestartHint) {
+              msg += '\n\nRun this to restart:\n' + result.manualRestartHint;
+            }
+            msg += '\n\nAfter restart, log in with credentials from the backup.';
+          }
         } else {
-          msg += '\\nReload the page to see the new state.';
+          msg += '\nReload the page to see the new state.';
         }
         await showAlert(msg);
-        // Force a reload so the UI reflects restored data, unless secrets
-        // changed in which case the server is mid-restart and reload will
-        // fail until it comes back up.
-        if (!result.requiresRestart) {
+        // If supervisor will auto-restart, poll then reload. If manual,
+        // don't reload — the page would just fail until they restart.
+        if (result.requiresRestart && result.willAutoRestart) {
+          // Server is mid-restart — leave the page alone, user reloads
+          // manually when ready
+        } else if (!result.requiresRestart) {
           location.reload();
         }
+        // (manual restart case: leave the user on this page so the
+        // restart hint stays visible until they actually restart.)
       } catch (err) {
         status.textContent = 'Restore failed: ' + err.message;
         showAlert('Restore failed: ' + err.message);
@@ -3427,9 +3441,18 @@
         if (!r.ok || !data.ok) {
           throw new Error(data.error || ('HTTP ' + r.status));
         }
-        msgEl.textContent = 'Restore complete. Server is restarting — reload in 5 seconds.';
-        // Wait for the server to come back, then reload
-        setTimeout(() => location.reload(), 5500);
+        if (data.result?.willAutoRestart) {
+          msgEl.textContent = 'Restore complete. Server is restarting — page will reload in 5 seconds.';
+          // Wait for the server to come back, then reload
+          setTimeout(() => location.reload(), 5500);
+        } else {
+          // Manual restart required — show the hint and wait for the
+          // user to restart and reload manually.
+          const hint = data.result?.manualRestartHint || 'Restart the server manually.';
+          msgEl.innerHTML = 'Restore complete. <strong>Server restart REQUIRED</strong> for new secrets to take effect.<br>Run: <code>' +
+            hint.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+            '</code><br>Then reload this page and log in with credentials from the backup.';
+        }
       } catch (err) {
         msgEl.textContent = 'Restore failed: ' + err.message;
         showAlert('Restore failed: ' + err.message);

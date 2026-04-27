@@ -9,6 +9,7 @@
 const express = require('express');
 const router = express.Router();
 const backup = require('../lib/backup');
+const supervisor = require('../lib/process-supervisor');
 
 // Body size limit for restore. Cover art is base64-encoded so
 // backup files are bigger than raw — allow 100 MB which covers
@@ -85,15 +86,39 @@ router.post('/restore', express.json({ limit: RESTORE_BODY_LIMIT }), (req, res) 
     const result = backup.restoreBackup(bkp, safePolicies);
     console.log('[backup/restore] complete:', JSON.stringify(result));
 
+    // If secrets were restored we need a process restart for the new
+    // jwtSecret + showToken to take effect (they're loaded once at
+    // startup and held in memory). Behavior depends on whether a
+    // process supervisor is managing us:
+    //
+    //   - PM2 / systemd / Docker — process.exit(0) → supervisor revives us
+    //   - plain `node server.js` — exiting would kill the server, so
+    //     we tell the admin to restart manually instead
+    //
+    // The detection is best-effort; admins can override via
+    // SHOWPILOT_RESTART_MODE env var (exit | manual).
+    let willAutoRestart = false;
+    let manualRestartHint = null;
+    if (result.requiresRestart) {
+      const mode = supervisor.getRestartMode();
+      if (mode === 'auto-exit') {
+        willAutoRestart = true;
+      } else {
+        // manual — leave the process running, tell the user what to do
+        manualRestartHint = supervisor.getManualRestartHint();
+      }
+    }
+    result.willAutoRestart = willAutoRestart;
+    result.manualRestartHint = manualRestartHint;
+    result.detectedSupervisor = supervisor.detectSupervisor();
+
     res.json({ ok: true, result });
 
-    // If secrets were restored, schedule a restart after the response
-    // has been flushed. We rely on the process manager (PM2/systemd)
-    // to bring the server back. Without a process manager, this is a
-    // hard exit — admin must restart manually.
-    if (result.requiresRestart) {
+    // Schedule the exit AFTER the response flushes. Only if we're
+    // actually under a supervisor that'll bring us back.
+    if (willAutoRestart) {
       setTimeout(() => {
-        console.log('[backup/restore] exiting for restart (secrets changed)');
+        console.log('[backup/restore] exiting for supervisor-managed restart (secrets changed)');
         process.exit(0);
       }, 1500);
     }
@@ -141,13 +166,24 @@ function restoreFirstBootHandler(req, res) {
     };
     const result = backup.restoreBackup(bkp, policies);
     console.log('[backup/restore-first-boot] complete:', JSON.stringify(result));
+
+    // First-boot restore always replaces secrets; behavior depends on
+    // whether a supervisor is managing us. Same logic as the in-app
+    // restore path — see comments there.
+    const mode = supervisor.getRestartMode();
+    const willAutoRestart = mode === 'auto-exit';
+    result.willAutoRestart = willAutoRestart;
+    result.manualRestartHint = willAutoRestart ? null : supervisor.getManualRestartHint();
+    result.detectedSupervisor = supervisor.detectSupervisor();
+
     res.json({ ok: true, result });
 
-    // First-boot restore always replaces secrets, so always restart.
-    setTimeout(() => {
-      console.log('[backup/restore-first-boot] exiting for restart');
-      process.exit(0);
-    }, 1500);
+    if (willAutoRestart) {
+      setTimeout(() => {
+        console.log('[backup/restore-first-boot] exiting for supervisor-managed restart');
+        process.exit(0);
+      }, 1500);
+    }
   } catch (err) {
     console.error('[backup/restore-first-boot] failed:', err);
     res.status(500).json({ error: 'Restore failed: ' + err.message });
