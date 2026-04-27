@@ -1705,34 +1705,79 @@
         a.preload = 'auto';
         a.crossOrigin = 'anonymous';  // allow Web Audio to tap if we ever need it again
         a.src = urlsToTry[0];
-        // Apply mute state immediately. The element's `muted` attribute
-        // is independent of `volume` — using `muted` because some phones
-        // pause when volume is exactly 0 (energy-saving heuristic).
         a.muted = isMuted;
         a.volume = 1;
-        // Wait for enough data to play. `canplay` fires when the browser
-        // has buffered enough to start without immediately stalling.
+
+        // Wait for enough data to play. `canplaythrough` is more
+        // conservative than `canplay` — fires when the browser believes
+        // it has enough buffered to play to the end without rebuffering.
+        // We use it because the wall-clock scheduling below assumes
+        // .play() will start audio output essentially immediately;
+        // if `canplay` fires too eagerly, .play() could stall and add
+        // unpredictable startup latency that breaks the scheduled-start
+        // sync between phones.
         await new Promise((resolve, reject) => {
           let settled = false;
           const onReady = () => { if (!settled) { settled = true; resolve(); } };
           const onErr = () => { if (!settled) { settled = true; reject(new Error('audio load failed')); } };
-          a.addEventListener('canplay', onReady, { once: true });
+          a.addEventListener('canplaythrough', onReady, { once: true });
+          // Fallback to canplay if canplaythrough doesn't fire in 3s —
+          // some browsers are stingy about firing it. Better to start
+          // with less buffer than to never start.
+          setTimeout(() => a.addEventListener('canplay', onReady, { once: true }), 3000);
           a.addEventListener('error', onErr, { once: true });
-          // Safety timeout — some browsers are slow on canplay over cellular.
-          // 15s is generous; if data still isn't flowing by then, the user
-          // has connectivity issues and waiting longer won't help.
           setTimeout(() => { if (!settled) { settled = true; reject(new Error('audio load timeout')); } }, 15000);
         });
 
-        // Seek to the current playback position before pressing play.
-        // getExpectedPosition() returns the position we should be at NOW,
-        // accounting for live FPP position (if available) plus the
-        // configured offset for hardware buffer compensation.
-        const targetPos = getExpectedPosition();
-        if (targetPos > 0 && a.duration && targetPos < a.duration) {
-          a.currentTime = targetPos;
+        // ---- Wall-clock-scheduled start ----
+        // Multi-phone sync depends on every phone calling .play() at the
+        // same WALL CLOCK moment, with currentTime set to where the
+        // track will be at THAT moment. We can't just call .play() right
+        // after canplay, because canplay fires at different times on
+        // different devices (variable buffering, decoding, etc.).
+        //
+        // Instead, we pick a future server time — far enough out that
+        // every phone has time to finish loading — and schedule both
+        // the seek and the play call to occur at that exact moment.
+        // Burst clock sync (v0.21.0+) gives us accurate enough
+        // server-time estimates that two phones hitting the same
+        // server-time target will fire .play() within ~10-20ms of each
+        // other in true wall-clock time.
+        //
+        // Lead-in is long enough to absorb any straggler buffering
+        // on slower devices (cellular phones especially). 600ms is
+        // generous; tightens later if testing shows it's overkill.
+        const TARGET_START_LEAD_MS = 600;
+        const targetServerStartMs = Date.now() + clockOffset + TARGET_START_LEAD_MS;
+        // Compute the audio file position the track will be AT when
+        // we press play at the scheduled moment. This is the live
+        // position extrapolated forward to the target moment.
+        let targetPosition;
+        if (livePosition && livePosition.sequence === currentSequence) {
+          const elapsedFromUpdateToTarget = (targetServerStartMs - livePosition.updatedAt) / 1000;
+          targetPosition = livePosition.position + elapsedFromUpdateToTarget - (audioSyncOffsetMs / 1000);
+        } else {
+          targetPosition = (targetServerStartMs - trackStartedAtMs) / 1000 - (audioSyncOffsetMs / 1000);
         }
+        if (targetPosition < 0) targetPosition = 0;
+        if (a.duration && targetPosition >= a.duration) {
+          // Track will be over by the time we'd start. Bail; track-change
+          // poll will pick up the next sequence.
+          statusEl.textContent = 'Waiting for next track…';
+          return;
+        }
+        a.currentTime = targetPosition;
 
+        // Now wait until the target wall-clock moment, then play.
+        // localTargetMs is the local Date.now() value corresponding to
+        // the target server time, computed by inverting clockOffset.
+        const localTargetMs = targetServerStartMs - clockOffset;
+        const waitMs = localTargetMs - Date.now();
+        if (waitMs > 0) {
+          await new Promise(r => setTimeout(r, waitMs));
+        }
+        // Set as active right before play so re-seek correction in the
+        // drift loop doesn't compete with us during the brief wait.
         htmlAudio = a;
         await a.play();
         setPlayIcon(true);
