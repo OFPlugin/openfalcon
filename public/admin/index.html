@@ -1478,6 +1478,20 @@
     </label>
     <button onclick="login()">Log in</button>
     <div id="loginMsg"></div>
+
+    <!-- First-boot restore: shows only when this server is in its initial
+         "admin/admin must change password" state. Lets a fresh install
+         restore from a backup before the operator logs in for the first
+         time, so they don't have to set up the show twice. -->
+    <div id="firstBootRestore" class="hidden" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
+      <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
+        New install? You can restore from a previous ShowPilot backup
+        instead of setting everything up from scratch.
+      </p>
+      <input type="file" id="firstBootRestoreFile" accept="application/json,.json"
+             onchange="firstBootRestore(event)" style="margin-bottom: 0.5rem;" />
+      <div id="firstBootRestoreMsg" class="muted" style="font-size: 0.85rem;"></div>
+    </div>
   </div>
 
   <!-- ============================================================
@@ -1487,7 +1501,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.24.5</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.25.0</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -2163,6 +2177,7 @@
             <div class="sub-tab" data-subtab="audio" onclick="switchTab('audio')">Audio</div>
             <div class="sub-tab" data-subtab="app" onclick="switchTab('app')">App</div>
             <div class="sub-tab" data-subtab="safeguards" onclick="switchTab('safeguards')">Interaction Safeguards</div>
+            <div class="sub-tab" data-subtab="backup" onclick="switchTab('backup')">Backup &amp; Restore</div>
           </div>
 
           <!-- GENERAL SETTINGS — applies to all templates -->
@@ -2443,6 +2458,42 @@
               Leave blank to disable external access.
             </p>
           </div>
+        </div>
+
+        <!-- BACKUP & RESTORE — full instance backup including DB, config.js, optional cover art -->
+        <div class="sub-tab-pane" data-subtab="backup">
+          <h3>Export configuration</h3>
+          <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+            Downloads a single JSON file containing your settings, sequences,
+            templates, users, and the secrets needed to migrate to another
+            ShowPilot instance. Useful for backups before major changes,
+            or for moving to a new server.
+          </p>
+          <div class="row" style="gap: 1rem; align-items: center; margin-bottom: 0.5rem;">
+            <label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; margin: 0;">
+              <input type="checkbox" id="exportIncludeCoverArt" style="width: auto; margin: 0;" />
+              Include cover-art images (larger file)
+            </label>
+          </div>
+          <button onclick="downloadBackup()">⬇ Download backup</button>
+          <div id="exportStatus" class="muted" style="margin-top: 0.75rem; font-size: 0.85rem;"></div>
+
+          <hr style="margin: 1.75rem 0; border: none; border-top: 1px solid var(--border);" />
+
+          <h3>Restore from backup</h3>
+          <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+            Upload a previously-exported backup. You'll see a comparison of what's
+            in the backup vs your current data, and pick what to do per section
+            (replace, merge, or skip). Restoring secrets will end all current
+            admin sessions and trigger a server restart.
+          </p>
+          <input type="file" id="restoreFileInput" accept="application/json,.json"
+                 onchange="onRestoreFileSelected(event)"
+                 style="margin-bottom: 0.5rem;" />
+          <div id="restoreStatus" class="muted" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
+
+          <!-- The inspect/policies UI gets injected here -->
+          <div id="restorePoliciesArea" style="display: none; margin-top: 1rem;"></div>
         </div>
       </div>
 
@@ -2902,6 +2953,268 @@
         await showAlert('Clear error: ' + e.message);
       }
     }
+
+    // ============================================================
+    // Backup & Restore (v0.25.0+)
+    // ============================================================
+
+    function downloadBackup() {
+      const includeCoverArt = document.getElementById('exportIncludeCoverArt').checked;
+      const status = document.getElementById('exportStatus');
+      status.textContent = 'Building backup...';
+      // Simple download via same-origin GET — browser handles save dialog
+      const url = '/api/admin/backup/export' + (includeCoverArt ? '?coverArt=1' : '');
+      // Use fetch + blob so we can show the size/status; for simple cases
+      // a plain anchor click would work too.
+      fetch(url, { credentials: 'include' })
+        .then(r => {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          // Pull filename from Content-Disposition if present
+          const cd = r.headers.get('Content-Disposition') || '';
+          const m = cd.match(/filename="([^"]+)"/);
+          const filename = m ? m[1] : 'showpilot-backup.json';
+          return r.blob().then(blob => ({ blob, filename }));
+        })
+        .then(({ blob, filename }) => {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+          const sizeMb = (blob.size / 1048576).toFixed(2);
+          status.textContent = `Downloaded ${filename} (${sizeMb} MB)`;
+        })
+        .catch(err => {
+          status.textContent = 'Export failed: ' + err.message;
+          showAlert('Export failed: ' + err.message);
+        });
+    }
+
+    let pendingBackup = null;  // parsed JSON of the chosen file
+    let pendingSummary = null; // server-side inspect result
+
+    async function onRestoreFileSelected(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const status = document.getElementById('restoreStatus');
+      status.textContent = 'Reading file...';
+      try {
+        const text = await file.text();
+        let parsed;
+        try {
+          parsed = JSON.parse(text);
+        } catch (e) {
+          throw new Error('File is not valid JSON: ' + e.message);
+        }
+        pendingBackup = parsed;
+
+        status.textContent = 'Validating backup...';
+        const r = await fetch('/api/admin/backup/inspect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(parsed),
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + r.status));
+        }
+        pendingSummary = data.summary;
+        status.textContent = '';
+        renderRestorePolicies(pendingSummary);
+      } catch (err) {
+        status.textContent = 'Could not read backup: ' + err.message;
+        document.getElementById('restorePoliciesArea').style.display = 'none';
+        pendingBackup = null;
+        pendingSummary = null;
+      }
+    }
+
+    function renderRestorePolicies(summary) {
+      const area = document.getElementById('restorePoliciesArea');
+      const sections = ['config', 'sequences', 'templates', 'users'];
+      const sectionLabels = {
+        config: 'Settings',
+        sequences: 'Sequences',
+        templates: 'Templates',
+        users: 'Admin users',
+      };
+      // For each section, build a small panel showing counts + radio policy.
+      // Config has only replace/skip (single-row table; no merge concept).
+      let sectionsHtml = '';
+      for (const s of sections) {
+        const info = summary.sections[s] || {};
+        const showMerge = s !== 'config';
+        const defaultPolicy = s === 'config' ? 'replace' : 'merge';
+        sectionsHtml += `
+          <div class="row" style="display: block; padding: 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 0.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.5rem;">
+              <div><strong>${sectionLabels[s]}</strong></div>
+              <div class="muted" style="font-size: 0.85rem;">
+                Backup: ${info.backupCount ?? 0} ·
+                Destination: ${info.destCount ?? 0}
+                ${showMerge && info.backupCount > 0
+                  ? ` · In both: ${info.inBoth} · Only in backup: ${info.onlyInBackup} · Only in destination: ${info.onlyInDest}`
+                  : ''}
+              </div>
+            </div>
+            <div style="margin-top: 0.5rem; display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.9rem;">
+              <label style="display:flex; align-items:center; gap: 0.3rem; margin: 0; cursor: pointer;">
+                <input type="radio" name="policy_${s}" value="replace" ${defaultPolicy === 'replace' ? 'checked' : ''} style="width: auto; margin: 0;" />
+                Replace ${showMerge ? '(wipe and overwrite)' : ''}
+              </label>
+              ${showMerge ? `
+                <label style="display:flex; align-items:center; gap: 0.3rem; margin: 0; cursor: pointer;">
+                  <input type="radio" name="policy_${s}" value="merge" ${defaultPolicy === 'merge' ? 'checked' : ''} style="width: auto; margin: 0;" />
+                  Merge (upsert by name)
+                </label>
+              ` : ''}
+              <label style="display:flex; align-items:center; gap: 0.3rem; margin: 0; cursor: pointer;">
+                <input type="radio" name="policy_${s}" value="skip" style="width: auto; margin: 0;" />
+                Skip
+              </label>
+            </div>
+          </div>
+        `;
+      }
+
+      // Secrets toggle (separate from sections)
+      const secretsHtml = `
+        <div class="row" style="display: block; padding: 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 0.5rem;">
+          <div><strong>Secrets (config.js)</strong></div>
+          <p class="muted" style="font-size: 0.85rem; margin: 0.3rem 0 0.5rem;">
+            ${summary.hasConfigJs
+              ? 'The backup includes the source instance\\'s jwtSecret + showToken. Restoring these will log out all admin sessions, invalidate the current FPP plugin\\'s connection, and require a server restart. Use this when migrating to a new server.'
+              : 'The backup does not include a config.js — secrets cannot be restored.'}
+          </p>
+          ${summary.hasConfigJs ? `
+            <div style="display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.9rem;">
+              <label style="display:flex; align-items:center; gap: 0.3rem; margin: 0; cursor: pointer;">
+                <input type="radio" name="policy_secrets" value="replace" style="width: auto; margin: 0;" />
+                Replace (will trigger server restart)
+              </label>
+              <label style="display:flex; align-items:center; gap: 0.3rem; margin: 0; cursor: pointer;">
+                <input type="radio" name="policy_secrets" value="keep" checked style="width: auto; margin: 0;" />
+                Keep current secrets
+              </label>
+            </div>
+          ` : ''}
+        </div>
+      `;
+
+      const coverArtHtml = summary.coverArtCount > 0 ? `
+        <div class="row" style="display: block; padding: 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 0.5rem;">
+          <div><strong>Cover-art images</strong>
+            <span class="muted" style="font-size: 0.85rem;"> · ${summary.coverArtCount} files in backup</span>
+          </div>
+          <div style="margin-top: 0.5rem; display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.9rem;">
+            <label style="display:flex; align-items:center; gap: 0.3rem; margin: 0; cursor: pointer;">
+              <input type="radio" name="policy_coverArt" value="restore" checked style="width: auto; margin: 0;" />
+              Restore (overwrites existing files with same name)
+            </label>
+            <label style="display:flex; align-items:center; gap: 0.3rem; margin: 0; cursor: pointer;">
+              <input type="radio" name="policy_coverArt" value="skip" style="width: auto; margin: 0;" />
+              Skip
+            </label>
+          </div>
+        </div>
+      ` : '';
+
+      area.innerHTML = `
+        <h3>Choose what to restore</h3>
+        <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+          Backup taken ${summary.backupExportedAt}
+          ${summary.backupVersion ? ` · from ShowPilot v${summary.backupVersion}` : ''}
+        </p>
+        ${sectionsHtml}
+        ${secretsHtml}
+        ${coverArtHtml}
+        <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+          <button onclick="confirmRestore()">Apply restore</button>
+          <button class="secondary" onclick="cancelRestore()">Cancel</button>
+        </div>
+      `;
+      area.style.display = 'block';
+    }
+
+    function cancelRestore() {
+      pendingBackup = null;
+      pendingSummary = null;
+      document.getElementById('restoreFileInput').value = '';
+      document.getElementById('restorePoliciesArea').style.display = 'none';
+      document.getElementById('restoreStatus').textContent = '';
+    }
+
+    async function confirmRestore() {
+      if (!pendingBackup) return;
+      // Collect policies from the radio groups
+      const sectionNames = ['config', 'sequences', 'templates', 'users'];
+      const policies = {};
+      for (const s of sectionNames) {
+        const sel = document.querySelector(`input[name="policy_${s}"]:checked`);
+        policies[s] = sel ? sel.value : 'skip';
+      }
+      const secretsSel = document.querySelector('input[name="policy_secrets"]:checked');
+      policies.secrets = secretsSel ? secretsSel.value : 'keep';
+      const coverArtSel = document.querySelector('input[name="policy_coverArt"]:checked');
+      policies.coverArt = coverArtSel ? coverArtSel.value : 'skip';
+
+      // Big warning if secrets are being replaced — and refuse if user picks
+      // skip on everything (would be a no-op).
+      const allSkip = Object.values(policies).every(p => p === 'skip' || p === 'keep');
+      if (allSkip) {
+        await showAlert('Nothing selected to restore — every section is set to skip.');
+        return;
+      }
+
+      let warning = 'Apply this restore? This action cannot be undone.';
+      if (policies.secrets === 'replace') {
+        warning += '\\n\\nThe server will RESTART after restore (secrets changed). All admin sessions will end. You\\'ll need to log in with credentials from the backup.';
+      }
+      if (Object.values(policies).some(p => p === 'replace')) {
+        warning += '\\n\\nReplace mode wipes destination data for those sections.';
+      }
+      const ok = await showConfirm(warning, { okLabel: 'Restore', danger: true });
+      if (!ok) return;
+
+      const status = document.getElementById('restoreStatus');
+      status.textContent = 'Applying restore...';
+      try {
+        const r = await fetch('/api/admin/backup/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ backup: pendingBackup, policies }),
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + r.status));
+        }
+        const result = data.result;
+        let msg = 'Restore complete.\\n\\n';
+        for (const [section, count] of Object.entries(result.restored)) {
+          if (count > 0) msg += `• ${section}: ${count} rows\\n`;
+        }
+        if (result.coverArtRestored > 0) msg += `• cover art: ${result.coverArtRestored} files\\n`;
+        if (result.requiresRestart) {
+          msg += '\\nServer is restarting now (secrets changed). The page will become unresponsive briefly. Reload after a few seconds and log in with credentials from the backup.';
+        } else {
+          msg += '\\nReload the page to see the new state.';
+        }
+        await showAlert(msg);
+        // Force a reload so the UI reflects restored data, unless secrets
+        // changed in which case the server is mid-restart and reload will
+        // fail until it comes back up.
+        if (!result.requiresRestart) {
+          location.reload();
+        }
+      } catch (err) {
+        status.textContent = 'Restore failed: ' + err.message;
+        showAlert('Restore failed: ' + err.message);
+      }
+    }
   </script>
 
   <script>
@@ -3066,6 +3379,60 @@
         if (r.data?.mustChangePassword) showChangePasswordModal(true);
       } else {
         show('loginView'); hide('appView');
+        // Check if this is a fresh install — if so, show the
+        // restore-from-backup option below the login form.
+        try {
+          const f = await fetch('/api/setup/first-boot-status', { credentials: 'include' });
+          if (f.ok) {
+            const data = await f.json();
+            const fb = document.getElementById('firstBootRestore');
+            if (fb) fb.classList.toggle('hidden', !data.firstBoot);
+          }
+        } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // First-boot restore — uploads a backup before any admin login.
+    // Server gates this to "still in initial admin/admin state."
+    async function firstBootRestore(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const msgEl = document.getElementById('firstBootRestoreMsg');
+      msgEl.textContent = 'Reading backup...';
+      try {
+        const text = await file.text();
+        let parsed;
+        try { parsed = JSON.parse(text); }
+        catch (e) { throw new Error('File is not valid JSON'); }
+        // Inspect endpoint requires auth — skip it on first-boot path
+        // and just submit. The server will validate the manifest.
+        const ok = await showConfirm(
+          'Restore this backup as the initial state of this fresh install?\n\n' +
+          'The server will RESTART afterward (secrets are restored). The page will reload itself once the server comes back up.',
+          { okLabel: 'Restore', danger: true }
+        );
+        if (!ok) {
+          msgEl.textContent = '';
+          document.getElementById('firstBootRestoreFile').value = '';
+          return;
+        }
+        msgEl.textContent = 'Applying restore...';
+        const r = await fetch('/api/setup/restore-from-backup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ backup: parsed }),
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + r.status));
+        }
+        msgEl.textContent = 'Restore complete. Server is restarting — reload in 5 seconds.';
+        // Wait for the server to come back, then reload
+        setTimeout(() => location.reload(), 5500);
+      } catch (err) {
+        msgEl.textContent = 'Restore failed: ' + err.message;
+        showAlert('Restore failed: ' + err.message);
       }
     }
 

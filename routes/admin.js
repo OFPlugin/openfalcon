@@ -1624,3 +1624,8 @@ router.get('/geocode', requireAdmin, async (req, res) => {
 });
 
 module.exports = router;
+// Expose the auth middleware so other route modules (e.g. backup) can
+// reuse it without duplicating jwt-verify boilerplate. Backup needs
+// admin auth on its in-app endpoints; the first-boot endpoints are
+// gated separately via lib/backup.isFirstBoot().
+module.exports.requireAdmin = requireAdmin;

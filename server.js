@@ -90,7 +90,22 @@ app.use((req, res, next) => {
 app.use('/api/plugin', require('./routes/plugin'));
 
 // Admin API (mount BEFORE /api/viewer to avoid prefix collisions)
-app.use('/api/admin', require('./routes/admin'));
+const adminRouter = require('./routes/admin');
+app.use('/api/admin', adminRouter);
+
+// Backup & restore API (v0.25.0+). The export/inspect/restore endpoints
+// require admin auth. The first-boot status + first-boot restore are
+// unauthenticated but gated by lib/backup.isFirstBoot() — they only
+// work when the install is in its initial admin/admin state.
+const backupRouter = require('./routes/backup');
+app.use('/api/admin/backup', adminRouter.requireAdmin, backupRouter);
+const express2 = require('express');
+app.get('/api/setup/first-boot-status', backupRouter.firstBootStatusHandler);
+app.post(
+  '/api/setup/restore-from-backup',
+  express2.json({ limit: '100mb' }),
+  backupRouter.restoreFirstBootHandler
+);
 
 // Public viewer API
 app.use('/api', require('./routes/viewer'));
