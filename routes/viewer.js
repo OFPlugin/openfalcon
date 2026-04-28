@@ -487,13 +487,14 @@ router.get('/visual-config', (req, res) => {
   // can't listen here at all" — but show-not-playing should toggle freely
   // as FPP starts/stops between songs without forcing viewers to refresh.
   //
-  // Threshold rationale: the plugin currently only POSTs to /api/plugin/playing
-  // on sequence CHANGE, not on a fixed cadence — so last_updated bumps once
-  // per song, not once per second. With typical 2-4min songs, a tight 10s
-  // threshold made the viewer flap to "not playing" almost immediately after
-  // each song change. 180s gives comfortable headroom for the longest songs
-  // we play while still catching a truly silent FPP within a few minutes.
-  // (The proper fix is a 1Hz heartbeat from the plugin; tracked separately.)
+  // Threshold rationale: the plugin POSTs /api/plugin/position every ~1s
+  // while a sequence is playing, and that handler bumps now_playing.last_updated.
+  // 10s = ~10 missed position reports before we say "not playing" — comfortable
+  // margin against transient network blips while still going stale within
+  // seconds when FPP idles, the plugin hangs, or the network partitions.
+  // (When FPP cleanly transitions to idle, the plugin POSTs /playing with an
+  // empty sequence, which sets sequence_name = NULL and trips the first
+  // branch below — instant, doesn't wait for the threshold.)
   let showNotPlaying = false;
   const np = getNowPlaying();
   if (!np || !np.sequence_name) {
@@ -503,7 +504,7 @@ router.get('/visual-config', (req, res) => {
     // (no TZ suffix). Adding 'Z' makes Date.parse treat it as UTC, matching how
     // it was written.
     const lastMs = Date.parse(np.last_updated + 'Z');
-    if (!isFinite(lastMs) || (Date.now() - lastMs) > 180_000) {
+    if (!isFinite(lastMs) || (Date.now() - lastMs) > 10_000) {
       showNotPlaying = true;
     }
   }

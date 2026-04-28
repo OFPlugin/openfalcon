@@ -561,6 +561,24 @@ router.post('/position', (req, res) => {
     updatedAt: Date.now(),
   };
 
+  // Bump now_playing.last_updated so the viewer's showNotPlaying gate
+  // (in routes/viewer.js#visual-config) sees a fresh heartbeat. Without
+  // this, last_updated only advances on sequence CHANGE (via setNowPlaying),
+  // which means it goes stale within seconds of a song starting and the
+  // viewer flaps to "Show isn't playing." Plugin reports /position every
+  // ~1s while a sequence is playing, so this naturally keeps the row
+  // fresh and goes stale within seconds when the plugin stops reporting
+  // (FPP idle / plugin hung / network partition).
+  //
+  // Guard with sequence_name match: if the server has already advanced
+  // to a new sequence (via /playing) when a stale /position for the old
+  // sequence races in, don't overwrite. The mismatched UPDATE is a no-op.
+  db.prepare(`
+    UPDATE now_playing
+    SET last_updated = CURRENT_TIMESTAMP
+    WHERE id = 1 AND sequence_name = ?
+  `).run(name);
+
   // Emit to all connected viewers. They'll use this as the freshest
   // anchor for sync — replaces extrapolating from a stale started_at.
   const io = req.app.get('io');
