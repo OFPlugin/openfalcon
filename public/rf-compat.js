@@ -2423,7 +2423,20 @@
     function getExpectedPosition() {
       const offsetSec = audioSyncOffsetMs / 1000;
       if (livePosition && livePosition.sequence === currentSequence) {
-        const elapsedSinceUpdate = (Date.now() - livePosition.updatedAt) / 1000;
+        // livePosition.updatedAt is a SERVER timestamp (Date.now() on
+        // the server when FPP reported the position). To compute "how
+        // long has it been since that update?" we have to express
+        // current time on the same scale — i.e. server time. The
+        // client's raw Date.now() is whatever its OS thinks the time
+        // is, which can be off by hundreds of ms to several seconds
+        // depending on the phone's NTP/cell-tower sync state. Two
+        // phones with different clock biases here would see different
+        // elapsed values and seek to different positions in the track,
+        // producing exactly the constant phone-to-phone offset we're
+        // trying to eliminate. clockOffset is computed by burst NTP-lite
+        // on connect; adding it shifts client time onto server time.
+        const serverNow = Date.now() + clockOffset;
+        const elapsedSinceUpdate = (serverNow - livePosition.updatedAt) / 1000;
         return livePosition.position + elapsedSinceUpdate - offsetSec;
       }
       // Fallback: extrapolate from track-start anchor
