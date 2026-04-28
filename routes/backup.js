@@ -25,7 +25,8 @@ const RESTORE_BODY_LIMIT = '100mb';
 router.get('/export', (req, res) => {
   try {
     const includeCoverArt = String(req.query.coverArt || '0') === '1';
-    const data = backup.buildBackup({ includeCoverArt });
+    const includeStats = String(req.query.stats || '0') === '1';
+    const data = backup.buildBackup({ includeCoverArt, includeStats });
     const ts = new Date().toISOString()
       .slice(0, 16)
       .replace(/[T:]/g, '-')

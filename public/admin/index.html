@@ -929,6 +929,49 @@
     }
 
     /* ============================================================
+     * FILE INPUTS (Backup restore, etc.)
+     * ============================================================
+     * Browsers ship hideous default file pickers — these styles align
+     * the file input with the rest of the admin UI. We can't fully
+     * style the file picker button cross-browser, but ::file-selector-button
+     * works in Chrome/Edge/Firefox/Safari 14+ which is plenty.
+     */
+    input[type="file"].sp-file-input {
+      display: block;
+      width: 100%;
+      max-width: 480px;
+      padding: 0.5rem;
+      background: var(--bg-input);
+      color: var(--text);
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    input[type="file"].sp-file-input:hover {
+      border-color: var(--border-hover);
+      background: var(--bg-tertiary);
+    }
+    input[type="file"].sp-file-input::file-selector-button {
+      padding: 0.45rem 0.85rem;
+      margin-right: 0.6rem;
+      background: var(--accent);
+      color: var(--accent-text);
+      border: none;
+      border-radius: 4px;
+      font-size: 0.82rem;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s;
+    }
+    input[type="file"].sp-file-input::file-selector-button:hover {
+      background: var(--accent-hover);
+    }
+
+    /* ============================================================
      * STAT CARDS (Dashboard)
      * ============================================================ */
     .stat-grid {
@@ -1489,6 +1532,7 @@
         instead of setting everything up from scratch.
       </p>
       <input type="file" id="firstBootRestoreFile" accept="application/json,.json"
+             class="sp-file-input"
              onchange="firstBootRestore(event)" style="margin-bottom: 0.5rem;" />
       <div id="firstBootRestoreMsg" class="muted" style="font-size: 0.85rem;"></div>
     </div>
@@ -1501,7 +1545,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.25.1</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.25.2</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -2469,10 +2513,15 @@
             ShowPilot instance. Useful for backups before major changes,
             or for moving to a new server.
           </p>
-          <div class="row" style="gap: 1rem; align-items: center; margin-bottom: 0.5rem;">
+          <div class="row" style="gap: 1rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap;">
             <label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; margin: 0;">
               <input type="checkbox" id="exportIncludeCoverArt" style="width: auto; margin: 0;" />
-              Include cover-art images (larger file)
+              Include cover-art images
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; margin: 0;"
+                   title="Includes last_played_at and play counters per sequence. Useful when migrating servers and you want to preserve play history.">
+              <input type="checkbox" id="exportIncludeStats" style="width: auto; margin: 0;" />
+              Include play stats
             </label>
           </div>
           <button onclick="downloadBackup()">⬇ Download backup</button>
@@ -2488,6 +2537,7 @@
             admin sessions and trigger a server restart.
           </p>
           <input type="file" id="restoreFileInput" accept="application/json,.json"
+                 class="sp-file-input"
                  onchange="onRestoreFileSelected(event)"
                  style="margin-bottom: 0.5rem;" />
           <div id="restoreStatus" class="muted" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
@@ -2960,10 +3010,15 @@
 
     function downloadBackup() {
       const includeCoverArt = document.getElementById('exportIncludeCoverArt').checked;
+      const includeStats = document.getElementById('exportIncludeStats').checked;
       const status = document.getElementById('exportStatus');
       status.textContent = 'Building backup...';
       // Simple download via same-origin GET — browser handles save dialog
-      const url = '/api/admin/backup/export' + (includeCoverArt ? '?coverArt=1' : '');
+      const params = new URLSearchParams();
+      if (includeCoverArt) params.set('coverArt', '1');
+      if (includeStats) params.set('stats', '1');
+      const qs = params.toString();
+      const url = '/api/admin/backup/export' + (qs ? '?' + qs : '');
       // Use fetch + blob so we can show the size/status; for simple cases
       // a plain anchor click would work too.
       fetch(url, { credentials: 'include' })
@@ -3086,7 +3141,7 @@
       // ${...} substitution — that pattern was causing parse errors in some
       // browser configurations even though Node parses it fine.
       const secretsExplain = summary.hasConfigJs
-        ? "The backup includes the source instance's jwtSecret + showToken. Restoring these will log out all admin sessions, invalidate the current FPP plugin's connection, and require a server restart. Use this when migrating to a new server."
+        ? "Restores just the jwtSecret and showToken from the backup, leaving this server's port, database path, and other config.js settings untouched. All current admin sessions will end. The FPP plugin keeps working without re-pasting the token. Server restart required."
         : "The backup does not include a config.js — secrets cannot be restored.";
       const secretsRadios = summary.hasConfigJs
         ? '<div style="display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.9rem;">'
