@@ -1597,6 +1597,25 @@
     // null after stopAudio.
     let htmlAudio = null;
 
+    // Post-startup correction state (v0.27.0).
+    // The browser's `.play()` call has non-deterministic startup latency
+    // — even on the same hardware between sessions, between 0 and 200ms
+    // can elapse between calling .play() and the speakers actually
+    // producing sound. Predicting this latency is hopeless. Measuring it
+    // after the fact is straightforward.
+    //
+    // pendingPostStartCorrectionAtMs is the wall-clock time at which we
+    // should perform a one-shot measurement of htmlAudio.currentTime
+    // against the expected position from FPP and seek-correct any error.
+    // Set when we call .play() for a new track; cleared once the
+    // correction fires or the track ends.
+    //
+    // 1.0s after play start gives the audio element time to settle into
+    // steady-state playback (initial buffer/decoder warmup is over) so
+    // the measurement reflects real per-device startup error rather than
+    // transient warmup wobble.
+    let pendingPostStartCorrectionAtMs = 0;
+
     // Live position from FPP. When the plugin is running >= 0.11.0, it
     // pushes "FPP is at position X.Y as of timestamp T" updates every
     // ~500ms via socket.io. We use this as the authoritative anchor for
@@ -2300,57 +2319,49 @@
           setTimeout(() => { if (!settled) { settled = true; reject(new Error('audio load timeout')); } }, 15000);
         });
 
-        // ---- Wall-clock-scheduled start ----
-        // Multi-phone sync depends on every phone calling .play() at the
-        // same WALL CLOCK moment, with currentTime set to where the
-        // track will be at THAT moment. We can't just call .play() right
-        // after canplay, because canplay fires at different times on
-        // different devices (variable buffering, decoding, etc.).
+        // ---- Play immediately, correct after startup (v0.27.0) ----
+        // Earlier versions tried to align phones by scheduling .play() at
+        // the same wall-clock moment ~600ms in the future. That doesn't
+        // work: even with perfectly synced clocks and identical seek
+        // positions, the time between calling .play() and audio actually
+        // leaving the speaker varies by 0-200ms per device per session
+        // (decoder warmup, OS audio engine startup, buffer state). Two
+        // phones aiming at the same scheduled moment land on it at
+        // measurably different real moments and stay that distance apart
+        // for the rest of the track — producing the constant offset that
+        // listeners hear as an echo between car windows.
         //
-        // Instead, we pick a future server time — far enough out that
-        // every phone has time to finish loading — and schedule both
-        // the seek and the play call to occur at that exact moment.
-        // Burst clock sync (v0.21.0+) gives us accurate enough
-        // server-time estimates that two phones hitting the same
-        // server-time target will fire .play() within ~10-20ms of each
-        // other in true wall-clock time.
-        //
-        // Lead-in is long enough to absorb any straggler buffering
-        // on slower devices (cellular phones especially). 600ms is
-        // generous; tightens later if testing shows it's overkill.
-        const TARGET_START_LEAD_MS = 600;
-        const targetServerStartMs = Date.now() + clockOffset + TARGET_START_LEAD_MS;
-        // Compute the audio file position the track will be AT when
-        // we press play at the scheduled moment. This is the live
-        // position extrapolated forward to the target moment.
-        let targetPosition;
-        if (livePosition && livePosition.sequence === currentSequence) {
-          const elapsedFromUpdateToTarget = (targetServerStartMs - livePosition.updatedAt) / 1000;
-          targetPosition = livePosition.position + elapsedFromUpdateToTarget - (audioSyncOffsetMs / 1000);
-        } else {
-          targetPosition = (targetServerStartMs - trackStartedAtMs) / 1000 - (audioSyncOffsetMs / 1000);
-        }
-        if (targetPosition < 0) targetPosition = 0;
-        if (a.duration && targetPosition >= a.duration) {
-          // Track will be over by the time we'd start. Bail; track-change
-          // poll will pick up the next sequence.
+        // Instead: every phone seeks to the expected position and plays
+        // immediately. The startup latency error is unavoidable at this
+        // step. Then ~1s later, after playback has stabilized, we measure
+        // htmlAudio.currentTime against the expected position computed
+        // from FPP's authoritative live-position channel, and seek-
+        // correct the error in one shot. Because both phones are
+        // correcting toward the same external reference (FPP), they
+        // converge to within their measurement noise of FPP, and
+        // therefore to within ~2x that noise of each other. Empirically
+        // this is well under 100ms — below the threshold of perception
+        // for synchronized music in adjacent cars.
+        const startPosition = getExpectedPosition();
+        if (startPosition < 0) {
+          a.currentTime = 0;
+        } else if (a.duration && startPosition >= a.duration) {
+          // Track will be over by the time we'd start. Track-change poll
+          // will pick up the next sequence on its own.
           statusEl.textContent = 'Waiting for next track…';
           return;
+        } else {
+          a.currentTime = startPosition;
         }
-        a.currentTime = targetPosition;
 
-        // Now wait until the target wall-clock moment, then play.
-        // localTargetMs is the local Date.now() value corresponding to
-        // the target server time, computed by inverting clockOffset.
-        const localTargetMs = targetServerStartMs - clockOffset;
-        const waitMs = localTargetMs - Date.now();
-        if (waitMs > 0) {
-          await new Promise(r => setTimeout(r, waitMs));
-        }
-        // Set as active right before play so re-seek correction in the
-        // drift loop doesn't compete with us during the brief wait.
+        // Set as active right before play so the drift loop's re-seek
+        // correction doesn't compete with us during the post-start window.
         htmlAudio = a;
         await a.play();
+        // Schedule the one-shot post-start measurement-and-correction.
+        // updateDriftDisplay() (running on its existing interval) checks
+        // this timestamp every tick and fires the correction once.
+        pendingPostStartCorrectionAtMs = Date.now() + 1000;
         setPlayIcon(true);
         statusEl.textContent = '';
         if (audioStartedAtMs === 0) audioStartedAtMs = Date.now();
@@ -2526,6 +2537,7 @@
       lastIntegrationTime = 0;
       lastCrossfadeAtCtx = 0;
       lastReseekAtMs = 0;
+      pendingPostStartCorrectionAtMs = 0;
     }
 
     // If the audio gate fires during playback (e.g. user walked outside the
@@ -2571,6 +2583,46 @@
       // Color thresholds: green <100ms, orange <500ms, red beyond.
       const absMs = Math.abs(ms);
       driftEl.style.color = absMs < 100 ? '#4ade80' : (absMs < 500 ? '#fb923c' : '#ef4444');
+
+      // ---- One-shot post-start correction (v0.27.0) ----
+      // Fires once, ~1s after .play() was called for the current track.
+      // This is the moment of truth for multi-phone sync: the browser's
+      // .play() startup latency has had time to settle, so the drift we
+      // measure now reflects per-device startup error (the dominant
+      // cause of phones being out of sync with each other and with the
+      // show speakers). We snap-correct it in one move — no rolling
+      // average, no throttle, tighter threshold than the long-tail loop.
+      //
+      // Fires before the rolling-average re-seek block so a single drift
+      // tick is enough to trigger correction; we don't have to wait for
+      // DRIFT_HISTORY_SIZE samples to fill.
+      if (pendingPostStartCorrectionAtMs > 0 && Date.now() >= pendingPostStartCorrectionAtMs) {
+        // Clear FIRST so any failure path doesn't re-fire on every tick.
+        pendingPostStartCorrectionAtMs = 0;
+        const POST_START_THRESHOLD_MS = 80;
+        if (Math.abs(ms) >= POST_START_THRESHOLD_MS &&
+            expectedPosition >= 0 &&
+            (!htmlAudio.duration || expectedPosition < htmlAudio.duration - 0.1)) {
+          try {
+            htmlAudio.currentTime = expectedPosition;
+            // Reset rolling history — the snap invalidated whatever
+            // samples we had, and we want clean measurements going
+            // forward for the long-tail loop.
+            driftHistory.length = 0;
+            // Update lastReseekAtMs so the long-tail loop respects its
+            // own throttle relative to this snap (no double-correcting
+            // a few seconds later).
+            lastReseekAtMs = Date.now();
+            if (typeof console !== 'undefined' && console.info) {
+              console.info('[ShowPilot] post-start correction:',
+                'startup error', ms, 'ms,',
+                'snapped to', expectedPosition.toFixed(3), 's');
+            }
+          } catch (err) {
+            console.warn('[ShowPilot] post-start correction failed:', err);
+          }
+        }
+      }
 
       // ---- Auto-correction via re-seek ----
       // HTML5 audio doesn't support smooth crossfade between sources
