@@ -134,7 +134,34 @@ router.get('/me', requireAdmin, (req, res) => {
     userId: req.user.id,
     rememberMe: !!req.user.remember_me,
     mustChangePassword: !!req.user.must_change_password,
+    theme: req.user.theme || null,
   });
+});
+
+// Per-user theme preference. Stored on the user so the choice follows them
+// across devices. The list here MUST stay in sync with ALL_THEMES in
+// public/admin/index.html — additions go in both places. We validate
+// against the allowlist rather than accepting any string both for DB
+// hygiene and because the value is dropped into a CSS class on the body
+// (`theme-${value}`), so an unbounded string would be a soft injection
+// risk if rendering ever changes.
+const ALLOWED_THEMES = new Set([
+  'stage-dark', 'stage-light',
+  'christmas', 'halloween', 'easter',
+  'stpatricks', 'independence', 'valentines',
+]);
+router.put('/me/theme', requireAdmin, (req, res) => {
+  const { theme } = req.body || {};
+  // null/empty clears the preference (falls back to default on next login)
+  if (theme === null || theme === '' || theme === undefined) {
+    require('../lib/db').setUserTheme(req.user.id, null);
+    return res.json({ ok: true, theme: null });
+  }
+  if (typeof theme !== 'string' || !ALLOWED_THEMES.has(theme)) {
+    return res.status(400).json({ error: 'Invalid theme' });
+  }
+  require('../lib/db').setUserTheme(req.user.id, theme);
+  res.json({ ok: true, theme });
 });
 
 // ============================================================

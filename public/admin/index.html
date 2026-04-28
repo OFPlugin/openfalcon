@@ -1591,7 +1591,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.26.2</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.26.3</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1607,7 +1607,7 @@
         <span class="header-show-btn-icon" aria-hidden="true">↗</span>
         <span class="header-show-btn-label">Show</span>
       </a>
-      <select id="themeSelect" class="theme-select" onchange="applyTheme(this.value)" title="Choose theme">
+      <select id="themeSelect" class="theme-select" onchange="setTheme(this.value)" title="Choose theme">
         <option value="stage-dark">Stage · Dark</option>
         <option value="stage-light">Stage · Light</option>
         <option value="christmas">🎄 Christmas</option>
@@ -2907,6 +2907,10 @@
     const ALL_THEMES = ['stage-dark', 'stage-light', 'christmas', 'halloween', 'easter', 'stpatricks', 'independence', 'valentines'];
     const LIGHT_THEMES = new Set(['stage-light', 'easter']);
 
+    // applyTheme: display-only. Updates DOM/Monaco/charts to reflect a
+    // theme. Caches in localStorage so the next page load can apply the
+    // theme before /me returns (avoids a flash of the wrong theme).
+    // Does NOT push to the server — that's setTheme's job.
     function applyTheme(theme) {
       const body = document.body;
       ALL_THEMES.forEach(t => body.classList.remove('theme-' + t));
@@ -2930,10 +2934,45 @@
         } catch { /* charts not ready yet */ }
       }, 0);
     }
+    // setTheme: user-driven theme change from the dropdown. Applies +
+    // persists to the server so the choice follows the user across
+    // devices. Failure to persist is logged but doesn't undo the local
+    // change — better to keep the visible theme they picked and let them
+    // retry than to spring back to the old one after a network blip.
+    async function setTheme(theme) {
+      applyTheme(theme);
+      try {
+        const r = await api('/me/theme', { method: 'PUT', body: JSON.stringify({ theme }) });
+        if (!r.ok) console.warn('Failed to save theme to server:', r.error || r.status);
+      } catch (e) {
+        console.warn('Failed to save theme to server:', e);
+      }
+    }
     (function initTheme() {
       const saved = localStorage.getItem('showpilot_theme') || 'stage-dark';
       applyTheme(saved);
     })();
+
+    // syncThemeWithServer: called after /me succeeds. Three cases:
+    //   1. Server has a theme → apply it (overrides localStorage). This
+    //      is how the choice follows you to a new device.
+    //   2. Server has no theme but localStorage does → push localStorage
+    //      up so this user's existing choice carries forward. One-time
+    //      migration; from then on the server is the source of truth.
+    //   3. Neither has anything → leave the default in place.
+    async function syncThemeWithServer(meData) {
+      if (!meData) return;
+      const serverTheme = meData.theme;
+      const localTheme = localStorage.getItem('showpilot_theme');
+      if (serverTheme && ALL_THEMES.includes(serverTheme)) {
+        if (serverTheme !== localTheme) applyTheme(serverTheme);
+        return;
+      }
+      if (localTheme && ALL_THEMES.includes(localTheme)) {
+        try { await api('/me/theme', { method: 'PUT', body: JSON.stringify({ theme: localTheme }) }); }
+        catch (e) { /* migration is best-effort; we'll try again next login */ }
+      }
+    }
 
     // ============================================================
     // MAIN TAB SWITCHER
@@ -3569,6 +3608,7 @@
       const r = await api('/me');
       if (r.ok) {
         window._ofCurrentUser = r.data;
+        syncThemeWithServer(r.data);
         renderHeaderUser();
         hide('loginView'); show('appView');
         await loadAll();
@@ -3656,7 +3696,10 @@
       if (r.ok) {
         // Capture current user from /me after login (login response doesn't include id)
         const me = await api('/me');
-        if (me.ok) window._ofCurrentUser = me.data;
+        if (me.ok) {
+          window._ofCurrentUser = me.data;
+          syncThemeWithServer(me.data);
+        }
         renderHeaderUser();
         hide('loginView'); show('appView');
         await loadAll();
