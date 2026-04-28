@@ -1197,6 +1197,15 @@
       display: flex; align-items: center; justify-content: center;
       overflow: hidden;
     `;
+    // If audio is disabled at the show level, force the button hidden.
+    // Distinct from the audio-gate-pending class (which can be lifted
+    // when location verifies) — this one stays hidden until admin
+    // re-enables audio and the viewer reloads. We still build the rest
+    // of the player so we don't have to add null-checks all through the
+    // initialization code; it just stays out of view.
+    if (!boot.audioEnabled) {
+      btn.style.display = 'none';
+    }
     // If audio gate is enabled, hide the button initially via CSS class
     // (with !important so other state changes like setMode('closed') can't
     // accidentally reveal it). The button is only revealed once the visual-config
@@ -2164,6 +2173,12 @@
 
     async function syncOnce() {
       try {
+        // Master audio kill-switch — admin disabled audio for this show.
+        // No point polling /api/now-playing-audio: the server returns
+        // {audioDisabled:true} and there's no launcher to drive anyway.
+        // Bail to keep the network quiet on every viewer's tab.
+        if (!boot.audioEnabled) return;
+
         // If the gate is latched (panel hidden, user kicked out for any
         // reason), don't keep polling for audio. The cached location may
         // be stale, audio might try to restart invisibly into a hidden

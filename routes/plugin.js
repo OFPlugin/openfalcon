@@ -859,10 +859,28 @@ const audioCache = require('../lib/audio-cache');
 // Plugin asks: "what hashes do you already have?" so it can upload only
 // what's missing. Returns a flat array — the plugin computes the diff
 // against its local file list. Cheap to call, idempotent.
+//
+// audioEnabled is the master server-side switch that tells the plugin
+// whether to bother syncing audio at all. When false, the plugin should
+// skip the upload phase entirely (don't even compute hashes — saves
+// CPU and disk reads on FPP). The plugin's own "Enable audio sync"
+// toggle is a local opt-out; the server's "audio_enabled" is global
+// and authoritative. If the server says no, the plugin says no.
 router.get('/audio-cache/manifest', (req, res) => {
+  const cfg = getConfig();
+  const audioEnabled = cfg.audio_enabled !== 0;
+  if (!audioEnabled) {
+    return res.json({
+      audioEnabled: false,
+      haveHashes: [],
+      fileCount: 0,
+      totalBytes: 0,
+    });
+  }
   const haveHashes = audioCache.getCachedHashes();
   const stats = audioCache.getCacheStats();
   res.json({
+    audioEnabled: true,
     haveHashes,
     fileCount: stats.fileCount,
     totalBytes: stats.totalBytes,
@@ -888,6 +906,14 @@ router.post(
   // WAV — whatever the user uploaded to FPP's music dir.
   express.raw({ type: '*/*', limit: '50mb' }),
   (req, res) => {
+    // Defense in depth — even if an old plugin hasn't been updated to
+    // honor the audioEnabled flag from /manifest, refuse the upload.
+    // Admin chose to disable audio for a reason; we don't write 5MB
+    // files to disk against their wishes.
+    const cfg = getConfig();
+    if (cfg.audio_enabled === 0) {
+      return res.status(403).json({ error: 'Audio is disabled for this show', audioEnabled: false });
+    }
     const claimedHash = String(req.query.hash || '').toLowerCase();
     const mediaName = String(req.query.mediaName || '');
     const mimeType = req.query.mimeType ? String(req.query.mimeType) : (req.headers['content-type'] || 'audio/mpeg');
@@ -932,6 +958,10 @@ router.post(
 // re-uploading bytes we already have. Common case: same audio file
 // appears in multiple sequences, or sync runs after a no-op restart.
 router.post('/audio-cache/link', (req, res) => {
+  const cfg = getConfig();
+  if (cfg.audio_enabled === 0) {
+    return res.status(403).json({ error: 'Audio is disabled for this show', audioEnabled: false });
+  }
   const { mediaName, hash } = req.body || {};
   if (!hash || !audioCache.isValidHash(String(hash).toLowerCase())) {
     return res.status(400).json({ error: 'Invalid hash format' });

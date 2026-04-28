@@ -1591,7 +1591,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.27.2</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.28.0</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -2435,6 +2435,22 @@
                their own top-level cards below the Settings card. Grouping
                them in one sub-tab makes audio tuning a single place to go. -->
           <div class="sub-tab-pane" data-subtab="audio">
+            <h3>Audio enabled</h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
+              Master switch for ShowPilot's built-in audio. Turn off if you
+              deliver audio externally (PulseMesh, FM transmitter, Icecast)
+              and don't want ShowPilot to host audio at all. When disabled:
+              the listen-on-phone button is hidden from viewers, audio
+              streaming endpoints are turned off, and the FPP plugin skips
+              uploading audio files entirely (saves disk space and sync time).
+              Other audio settings below have no effect when this is off.
+            </p>
+            <div class="row">
+              <input type="checkbox" id="cfg_audio_enabled" onchange="saveSetting('audio_enabled', this.checked ? 1 : 0); updateAudioEnabledVisibility();" />
+              <label for="cfg_audio_enabled" style="margin: 0;">Enable audio playback in ShowPilot</label>
+            </div>
+
+            <div id="cfg_audio_subsection" style="margin-top: 1.5rem;">
             <h3>Audio distance gate <span class="muted" style="font-size: 0.8rem; font-weight: normal;">(copyright safety)</span></h3>
             <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
               When enabled, viewers must be physically near your show to listen.
@@ -2456,6 +2472,7 @@
                      onchange="saveSetting('audio_gate_radius_miles', this.value)"
                      style="max-width: 120px;" />
               <span class="muted" style="font-size: 0.8rem;">— typically smaller than the interaction radius</span>
+            </div>
             </div>
           </div>
 
@@ -3782,6 +3799,7 @@
       setVal('cfg_show_latitude', c.show_latitude);
       setVal('cfg_show_longitude', c.show_longitude);
       setVal('cfg_check_radius_miles', c.check_radius_miles);
+      setChk('cfg_audio_enabled', c.audio_enabled !== 0);
       setChk('cfg_audio_gate_enabled', c.audio_gate_enabled);
       setVal('cfg_audio_gate_radius_miles', c.audio_gate_radius_miles || 0.5);
       setVal('cfg_audio_sync_offset_ms', c.audio_sync_offset_ms || 0);
@@ -3791,6 +3809,7 @@
       setVal('cfg_pwa_viewer_name', c.pwa_viewer_name || '');
       // Icon preview — show the configured icon if any, otherwise a hint.
       updatePwaIconPreview(c.pwa_viewer_icon);
+      updateAudioEnabledVisibility();
       updateAudioGateVisibility();
       setVal('cfg_hide_sequence_after_played', c.hide_sequence_after_played);
       setVal('cfg_blocked_ips', c.blocked_ips || '');
@@ -3823,6 +3842,19 @@
       if (!chk || !row) return;
       row.style.opacity = chk.checked ? '1' : '0.4';
       row.style.pointerEvents = chk.checked ? '' : 'none';
+    }
+
+    // When audio is globally disabled, every other audio setting becomes
+    // moot (gate is for an audio that won't play, offset is for sync that
+    // won't happen). Dim the entire subsection so it's visually clear,
+    // and disable interaction so accidental toggles don't queue up
+    // changes the user won't see take effect.
+    function updateAudioEnabledVisibility() {
+      const chk = document.getElementById('cfg_audio_enabled');
+      const sub = document.getElementById('cfg_audio_subsection');
+      if (!chk || !sub) return;
+      sub.style.opacity = chk.checked ? '1' : '0.4';
+      sub.style.pointerEvents = chk.checked ? '' : 'none';
     }
 
     // ---- Admin install button handling ----

@@ -525,6 +525,15 @@ router.get('/now-playing-audio', (req, res) => {
   const np = getNowPlaying();
   const cfg = getConfig();
 
+  // Master audio kill-switch. When admin has disabled audio entirely
+  // (e.g. they use PulseMesh / Icecast / FM and don't want ShowPilot
+  // hosting audio at all), respond with a stable shape that signals
+  // the viewer to hide the launcher and skip polling. We bypass the
+  // gate logic below — there's nothing to gate.
+  if (cfg.audio_enabled === 0) {
+    return res.json({ playing: false, audioDisabled: true });
+  }
+
   // Audio distance gating — used for copyright compliance to prevent listeners
   // who aren't actually present at the show from streaming the audio.
   // Viewer page passes ?lat=&lng= when geolocation is available. If the gate
@@ -658,6 +667,15 @@ router.get('/now-playing-audio', (req, res) => {
 // during sync). Falls back to proxying from FPP if not cached. Supports
 // HTTP Range requests so browsers can seek/resume.
 router.get('/audio-stream/:sequence', async (req, res) => {
+  // Master audio kill-switch — admin disabled audio entirely. Bail before
+  // any cache lookup or FPP proxy work. 404 (not 403) so the browser
+  // treats this the same as a missing file rather than a permission
+  // problem; viewer-side launcher is already hidden at this point.
+  const cfg = getConfig();
+  if (cfg.audio_enabled === 0) {
+    return res.status(404).send('Audio is disabled for this show.');
+  }
+
   // Case-insensitive lookup in case viewer page or admin renamed the sequence
   // with different casing than what we have in DB.
   const reqName = String(req.params.sequence || '');
@@ -738,7 +756,6 @@ router.get('/audio-stream/:sequence', async (req, res) => {
   res.setHeader('X-Audio-Source', 'fpp');
 
   // Need FPP host from plugin status
-  const cfg = getConfig();
   const fppHost = cfg.plugin_fpp_host;
   if (!fppHost) {
     return res.status(503).send('Audio streaming unavailable — plugin has not connected yet');
