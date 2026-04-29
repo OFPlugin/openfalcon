@@ -417,7 +417,7 @@ function updateSequence(req, res) {
   const id = Number(req.params.id);
   const fields = ['display_name', 'artist', 'category', 'image_url',
                   'duration_seconds', 'visible', 'votable', 'jukeboxable',
-                  'is_psa', 'display_order'];
+                  'is_psa', 'display_order', 'cooldown_minutes'];
   const updates = {};
   for (const k of fields) {
     if (k in req.body) updates[k] = req.body[k];

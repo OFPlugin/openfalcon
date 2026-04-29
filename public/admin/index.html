@@ -1591,7 +1591,7 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.29.1</span></span>
+      <span class="app-brand">ShowPilot <span class="app-version">v0.29.2</span></span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1770,6 +1770,7 @@
                   <th style="width: 70px;">Vote</th>
                   <th style="width: 70px;">Jukebox</th>
                   <th style="width: 60px;">PSA</th>
+                  <th style="width: 90px;" title="After this sequence plays, hide it from request UI and purge other queued copies for this many minutes. 0 = no cooldown.">Cooldown<br><span style="font-weight: normal; font-size: 0.75rem; color: var(--text-muted);">(min)</span></th>
                   <th style="width: 200px;"></th>
                 </tr>
               </thead>
@@ -5093,6 +5094,10 @@
         <td><label class="toggle" style="transform:scale(0.7);"><input type="checkbox" ${seq.votable ? 'checked' : ''} onchange="updateSeqField(${seq.id}, 'votable', this.checked ? 1 : 0)" /><span class="slider"></span></label></td>
         <td><label class="toggle" style="transform:scale(0.7);"><input type="checkbox" ${seq.jukeboxable ? 'checked' : ''} onchange="updateSeqField(${seq.id}, 'jukeboxable', this.checked ? 1 : 0)" /><span class="slider"></span></label></td>
         <td><label class="toggle" style="transform:scale(0.7);"><input type="checkbox" ${seq.is_psa ? 'checked' : ''} onchange="updateSeqField(${seq.id}, 'is_psa', this.checked ? 1 : 0)" /><span class="slider"></span></label></td>
+        <td><input type="number" min="0" max="1440" step="1" value="${seq.cooldown_minutes || 0}"
+                   onchange="updateSeqCooldown(${seq.id}, this)"
+                   style="width: 70px; padding: 0.3rem 0.4rem; font-size: 0.9rem;"
+                   title="Minutes to suppress this sequence after it plays. 0 = no cooldown." /></td>
         <td style="white-space: nowrap;">
           <button class="secondary" onclick="toggleSeqPreview(${seq.id})" title="Preview the audio for this sequence" style="margin-right: 0.4rem;">▶</button>
           <button class="secondary" onclick="openTrackSearchModal(${seq.id})" title="Search iTunes / MusicBrainz for the right title, artist, and cover" style="margin-right: 0.4rem;">🔍 Search</button>
@@ -5124,6 +5129,17 @@
       // Update local cache silently; don't reload to avoid yanking the user's focus
       const seq = sequencesCache.find(s => s.id === id);
       if (seq) seq[field] = trimmed;
+    }
+
+    // Cooldown input has its own helper because we need to coerce to a
+    // valid integer in [0, 1440] before sending — invalid values would
+    // either blow up the server validation or, worse, save garbage.
+    function updateSeqCooldown(id, inputEl) {
+      let v = parseInt(inputEl.value, 10);
+      if (!Number.isFinite(v) || v < 0) v = 0;
+      if (v > 1440) v = 1440; // cap at 24 hours; longer makes no sense for a single show
+      inputEl.value = v; // reflect the clamp back into the input
+      updateSeqField(id, 'cooldown_minutes', v);
     }
 
     // ======= Audio preview =======

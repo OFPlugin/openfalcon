@@ -37,16 +37,32 @@
     if (data.viewerControlMode === 'JUKEBOX') renderJukeboxList();
   }
 
+  // Format a cooldown_until ISO timestamp as "back at 9:42pm" for the UI.
+  // Uses the viewer's local timezone. Returns null if not in cooldown.
+  function cooldownLabel(seq) {
+    if (!seq.cooldown_until) return null;
+    const t = new Date(seq.cooldown_until);
+    if (isNaN(t.getTime()) || t.getTime() <= Date.now()) return null;
+    const opts = { hour: 'numeric', minute: '2-digit' };
+    return 'back at ' + t.toLocaleTimeString(undefined, opts).toLowerCase();
+  }
+
   function renderVoteList() {
     const list = el('voteList');
     list.innerHTML = '';
     state.sequences.filter(s => s.votable).forEach(seq => {
       const count = state.voteCounts[seq.name] || 0;
+      const cooldown = cooldownLabel(seq);
       const li = document.createElement('li');
       const btn = document.createElement('button');
-      btn.disabled = state.hasVoted;
+      // Cooldown sequences appear in the list but disabled and visually
+      // dimmed. Same approach as state.hasVoted disabling — the list keeps
+      // its consistent shape so the layout doesn't shift when sequences
+      // come in/out of cooldown.
+      btn.disabled = state.hasVoted || !!cooldown;
+      btn.style.opacity = cooldown ? '0.5' : '';
       btn.innerHTML = `
-        <span>${escapeHtml(seq.display_name)}${seq.artist ? ' — ' + escapeHtml(seq.artist) : ''}</span>
+        <span>${escapeHtml(seq.display_name)}${seq.artist ? ' — ' + escapeHtml(seq.artist) : ''}${cooldown ? ' <span class="cooldown-label" style="font-size:0.85em;opacity:0.8;">(' + escapeHtml(cooldown) + ')</span>' : ''}</span>
         <span class="vote-count">${count}</span>
       `;
       btn.onclick = () => vote(seq.name);
@@ -59,10 +75,13 @@
     const list = el('jukeboxList');
     list.innerHTML = '';
     state.sequences.filter(s => s.jukeboxable).forEach(seq => {
+      const cooldown = cooldownLabel(seq);
       const li = document.createElement('li');
       const btn = document.createElement('button');
-      btn.innerHTML = `<span>${escapeHtml(seq.display_name)}${seq.artist ? ' — ' + escapeHtml(seq.artist) : ''}</span><span>+</span>`;
-      btn.onclick = () => addToQueue(seq.name);
+      btn.disabled = !!cooldown;
+      btn.style.opacity = cooldown ? '0.5' : '';
+      btn.innerHTML = `<span>${escapeHtml(seq.display_name)}${seq.artist ? ' — ' + escapeHtml(seq.artist) : ''}${cooldown ? ' <span class="cooldown-label" style="font-size:0.85em;opacity:0.8;">(' + escapeHtml(cooldown) + ')</span>' : ''}</span><span>+</span>`;
+      btn.onclick = () => { if (!cooldown) addToQueue(seq.name); };
       li.appendChild(btn);
       list.appendChild(li);
     });

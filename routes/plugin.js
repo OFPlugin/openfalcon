@@ -522,6 +522,24 @@ router.post('/playing', (req, res) => {
       SET plays_since_hidden = plays_since_hidden + 1
       WHERE name != ? AND last_played_at IS NOT NULL
     `).run(name);
+
+    // Per-sequence cooldown (v0.29.2+): if the sequence that just started
+    // has cooldown_minutes > 0, purge any OTHER pending requests for the
+    // same sequence so it can't immediately repeat. We delete only entries
+    // that haven't been handed off to FPP yet (handed_off_at IS NULL) —
+    // an in-flight entry is the one currently playing or about to start
+    // and shouldn't be removed. The cooldown timer itself is implicit:
+    // last_played_at + cooldown_minutes is checked at request/voting time.
+    const seq = db.prepare(`SELECT id, cooldown_minutes FROM sequences WHERE name = ?`).get(name);
+    if (seq && seq.cooldown_minutes > 0) {
+      const purged = db.prepare(`
+        DELETE FROM jukebox_queue
+        WHERE sequence_id = ? AND played = 0 AND handed_off_at IS NULL
+      `).run(seq.id);
+      if (purged.changes > 0) {
+        console.log(`[cooldown] Purged ${purged.changes} queued copies of "${name}" (cooldown ${seq.cooldown_minutes}m)`);
+      }
+    }
   }
 
   const io = req.app.get('io');

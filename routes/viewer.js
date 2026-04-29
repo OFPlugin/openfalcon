@@ -83,6 +83,30 @@ function isSequenceHidden(seq, cfg) {
   return seq.plays_since_hidden < cfg.hide_sequence_after_played;
 }
 
+// Per-sequence cooldown check (v0.29.2+). Returns null if the sequence
+// is NOT in cooldown (or has cooldown disabled), or an ISO timestamp
+// string indicating when the cooldown expires. The check is purely
+// query-time — there's no scheduled job to clear it; it just naturally
+// stops being true once enough time has passed.
+//
+// Used in three places: viewer state (so the UI can gray out), jukebox
+// add (defense in depth — UI hides it but reject the request server-side
+// too), and voting nomination (filter out cooled-down sequences).
+function sequenceCooldownUntil(seq) {
+  if (!seq.cooldown_minutes || seq.cooldown_minutes <= 0) return null;
+  if (!seq.last_played_at) return null;
+  // SQLite stores last_played_at as a UTC string ('YYYY-MM-DD HH:MM:SS').
+  // Treat it as UTC by appending 'Z' if no timezone is present, so Date
+  // parsing doesn't apply local-time interpretation.
+  const lpa = String(seq.last_played_at);
+  const utc = /[Z+\-]/.test(lpa.slice(-6)) ? lpa : lpa.replace(' ', 'T') + 'Z';
+  const lastMs = Date.parse(utc);
+  if (!Number.isFinite(lastMs)) return null;
+  const untilMs = lastMs + seq.cooldown_minutes * 60_000;
+  if (untilMs <= Date.now()) return null;
+  return new Date(untilMs).toISOString();
+}
+
 function viewerPresenceCheck(req, cfg) {
   if (!cfg.check_viewer_present) return { ok: true };
   if (cfg.viewer_present_mode !== 'GPS') return { ok: true };
@@ -148,14 +172,19 @@ router.get('/state', (req, res) => {
   const allSequences = db.prepare(`
     SELECT id, name, display_name, artist, category, image_url,
            duration_seconds, votable, jukeboxable,
-           last_played_at, plays_since_hidden
+           last_played_at, plays_since_hidden, cooldown_minutes
     FROM sequences
     WHERE visible = 1 AND is_psa = 0
     ORDER BY display_order, display_name
   `).all();
 
   const { bustSequenceCovers } = require('../lib/cover-art');
-  const sequences = bustSequenceCovers(allSequences.filter(s => !isSequenceHidden(s, cfg)));
+  // Apply cover-art cache busting and decorate each sequence with its
+  // cooldown_until timestamp (null if not in cooldown). Existing
+  // count-based hide_sequence_after_played still applies separately —
+  // a sequence can be hidden by either or both rules.
+  const sequences = bustSequenceCovers(allSequences.filter(s => !isSequenceHidden(s, cfg)))
+    .map(s => ({ ...s, cooldown_until: sequenceCooldownUntil(s) }));
 
   const voteCounts = db.prepare(`
     SELECT sequence_name, COUNT(*) AS count FROM votes WHERE round_id = ? GROUP BY sequence_name
@@ -254,6 +283,13 @@ router.post('/vote', (req, res) => {
   if (!seq.votable || seq.is_psa) return res.status(400).json({ error: 'Sequence is not votable' });
   if (isSequenceHidden(seq, cfg)) {
     return res.status(400).json({ error: 'That sequence was recently played. Try another.' });
+  }
+  const cooldownUntilV = sequenceCooldownUntil(seq);
+  if (cooldownUntilV) {
+    return res.status(400).json({
+      error: 'That sequence was recently played. It will be available again shortly.',
+      cooldown_until: cooldownUntilV,
+    });
   }
 
   const token = ensureViewerToken(req, res);
@@ -378,6 +414,16 @@ router.post('/jukebox/add', (req, res) => {
   }
   if (isSequenceHidden(seq, cfg)) {
     return res.status(400).json({ error: 'That sequence was recently played. Try another.' });
+  }
+  // Cooldown check (v0.29.2+). The viewer UI already hides cooled-down
+  // sequences, but a stale page or a direct API caller could still try
+  // to request one — reject server-side too.
+  const cooldownUntil = sequenceCooldownUntil(seq);
+  if (cooldownUntil) {
+    return res.status(400).json({
+      error: 'That sequence was recently played. It will be available again shortly.',
+      cooldown_until: cooldownUntil,
+    });
   }
 
   const token = ensureViewerToken(req, res);
