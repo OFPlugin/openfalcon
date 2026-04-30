@@ -236,10 +236,34 @@ router.get('/state', (req, res) => {
     if (top) nextUp = top.sequence_name;
   }
 
+  // Now-playing timer support (v0.32.9+):
+  // The {NOW_PLAYING_TIMER} placeholder in viewer templates needs two
+  // pieces of info to render a countdown: when the song started and how
+  // long the song is. started_at is stored as UTC text in SQLite
+  // ("YYYY-MM-DD HH:MM:SS" with no zone marker); convert to ISO with
+  // explicit Z so the client's Date parser treats it as UTC. We look up
+  // duration with a direct query rather than searching `allSequences`
+  // because the now-playing track might be a PSA, hidden, or in cooldown
+  // — all of which are filtered out of allSequences. The timer should
+  // still tick for those.
+  let nowPlayingStartedAtIso = null;
+  let nowPlayingDurationSeconds = null;
+  if (nowPlaying.sequence_name && nowPlaying.started_at) {
+    nowPlayingStartedAtIso = nowPlaying.started_at.replace(' ', 'T') + 'Z';
+    const npRow = db.prepare(
+      `SELECT duration_seconds FROM sequences WHERE name = ? LIMIT 1`
+    ).get(nowPlaying.sequence_name);
+    if (npRow && npRow.duration_seconds) {
+      nowPlayingDurationSeconds = npRow.duration_seconds;
+    }
+  }
+
   res.json({
     showName: cfg.show_name,
     viewerControlMode: cfg.viewer_control_mode,
     nowPlaying: nowPlaying.sequence_name || null,
+    nowPlayingStartedAtIso,
+    nowPlayingDurationSeconds,
     nextScheduled: nextUp,
     activeViewers,
     sequences,

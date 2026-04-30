@@ -419,6 +419,23 @@ app.get('/', (req, res) => {
       // cookie here; that's the admin auth path's job.
     }
 
+    // Now-playing timer (v0.32.9+) — same convention as /api/state. Look
+    // up the now-playing sequence's duration directly so PSAs / hidden /
+    // cooldown sequences also get a working timer. The renderer turns
+    // this into the m:ss text inside the <span data-showpilot-timer>;
+    // rf-compat takes over after page load.
+    let nowPlayingStartedAtIso = null;
+    let nowPlayingDurationSeconds = null;
+    if (nowPlaying.sequence_name && nowPlaying.started_at) {
+      nowPlayingStartedAtIso = nowPlaying.started_at.replace(' ', 'T') + 'Z';
+      const npRow = db.prepare(
+        `SELECT duration_seconds FROM sequences WHERE name = ? LIMIT 1`
+      ).get(nowPlaying.sequence_name);
+      if (npRow && npRow.duration_seconds) {
+        nowPlayingDurationSeconds = npRow.duration_seconds;
+      }
+    }
+
     const html = renderTemplate(tpl, {
       config: cfg,
       sequences: sequencesBusted,
@@ -426,6 +443,8 @@ app.get('/', (req, res) => {
       queue,
       nowPlaying: nowPlaying.sequence_name,
       nextScheduled: nowPlaying.next_sequence_name,
+      nowPlayingStartedAtIso,
+      nowPlayingDurationSeconds,
       isAdmin,
     });
 
