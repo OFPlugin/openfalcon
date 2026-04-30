@@ -66,6 +66,30 @@ h3 {
   margin-top: 0.5rem;
 }
 
+/* v0.32.7+: Up Next row, always visible (jukebox/voting/off all have a
+   meaningful "next" value). Sits below the Now Playing name in the same
+   card. Smaller and lighter than the Now Playing line so the eye's drawn
+   to the current song first. */
+.up-next-row {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 107, 157, 0.2);
+  font-size: 0.95rem;
+  display: flex;
+  justify-content: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.up-next-label {
+  color: #9a9ab0;
+}
+
+.up-next-name {
+  color: #e8e8f0;
+  font-weight: 500;
+}
+
 .mode {
   margin-top: 2rem;
 }

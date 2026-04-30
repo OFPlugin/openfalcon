@@ -38,6 +38,17 @@
     el('nowPlayingName').textContent = data.nowPlaying
       ? (data.sequences.find(s => s.name === data.nowPlaying)?.display_name || data.nowPlaying)
       : '—';
+    // v0.32.7+: Up Next is shown in all modes. Server computes nextScheduled
+    // as the queue head in JUKEBOX, the current vote leader in VOTING, and
+    // whatever the schedule reports otherwise. Display name lookup falls
+    // back to the raw sequence name if the sequence isn't in the visible list
+    // (cooldown / hidden) — fine, since the server still returns the name.
+    const nextEl = el('nextUpName');
+    if (nextEl) {
+      nextEl.textContent = data.nextScheduled
+        ? (data.sequences.find(s => s.name === data.nextScheduled)?.display_name || data.nextScheduled)
+        : '—';
+    }
 
     state.mode = data.viewerControlMode;
     state.sequences = data.sequences;
@@ -237,10 +248,19 @@
     socket.on('nowPlaying', (data) => {
       const seq = state.sequences.find(s => s.name === data.sequenceName);
       el('nowPlayingName').textContent = seq ? seq.display_name : data.sequenceName;
+      // Song change ⇒ next-up changes too. Fetch full state to refresh
+      // the Up Next line + queue without a 30s wait.
+      fetchState();
     });
     socket.on('voteUpdate', (data) => {
       state.voteCounts = Object.fromEntries(data.counts.map(v => [v.sequence_name, v.count]));
-      if (state.mode === 'VOTING') renderVoteList();
+      if (state.mode === 'VOTING') {
+        renderVoteList();
+        // In voting mode, "next up" = current vote leader, which the
+        // server recomputes on every vote. Refresh so the Up Next line
+        // tracks live.
+        fetchState();
+      }
     });
     socket.on('queueUpdated', () => { fetchState(); });
     socket.on('viewerCount', (data) => { el('viewerCount').textContent = data.count || 0; });

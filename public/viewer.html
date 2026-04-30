@@ -20,6 +20,14 @@
     <section class="now-playing">
       <h2>Now Playing</h2>
       <div id="nowPlayingName" class="now-playing-name">—</div>
+      <!-- v0.32.7+: Up Next is no longer jukebox-only. In voting mode this
+           shows the current vote leader; in OFF mode it shows the next
+           scheduled sequence. The server computes the right value for
+           every mode and returns it as nextScheduled. -->
+      <div class="up-next-row">
+        <span class="up-next-label">Up Next:</span>
+        <span id="nextUpName" class="up-next-name">—</span>
+      </div>
     </section>
 
     <section id="modeVoting" class="mode hidden">
@@ -32,7 +40,7 @@
       <h2>Request a Song</h2>
       <p class="hint">Add your pick to the queue.</p>
       <ul id="jukeboxList" class="sequence-list"></ul>
-      <h3>Up Next</h3>
+      <h3>Queue</h3>
       <ol id="queueList" class="queue-list"></ol>
     </section>
 
