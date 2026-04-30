@@ -38,7 +38,7 @@
     el('nowPlayingName').textContent = data.nowPlaying
       ? (data.sequences.find(s => s.name === data.nowPlaying)?.display_name || data.nowPlaying)
       : '—';
-    // v0.32.7+: Up Next is shown in all modes. Server computes nextScheduled
+    // v0.32.8+: Up Next is shown in all modes. Server computes nextScheduled
     // as the queue head in JUKEBOX, the current vote leader in VOTING, and
     // whatever the schedule reports otherwise. Display name lookup falls
     // back to the raw sequence name if the sequence isn't in the visible list
