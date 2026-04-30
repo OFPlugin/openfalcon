@@ -216,7 +216,10 @@ router.put('/config', requireAdmin, (req, res) => {
     // Viewer player decoration
     'player_decoration',
     'player_decoration_animated',
-    'page_snow_enabled',
+    'page_snow_enabled',           // legacy; kept whitelisted so older admin tabs / backups still round-trip
+    'page_effect',                 // 'none' | 'snow' | 'leaves' | 'fireworks' | 'hearts' | 'stars' | 'bats' | 'confetti' | 'petals' | 'embers' | 'bubbles' | 'rain'
+    'page_effect_color',           // CSS color or empty string for "use default for this effect"
+    'page_effect_intensity',       // 'subtle' | 'medium' | 'heavy'
     'player_custom_color',
     // External access
     'public_base_url',

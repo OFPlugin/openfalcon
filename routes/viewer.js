@@ -613,7 +613,10 @@ router.get('/visual-config', (req, res) => {
   }
 
   res.json({
-    pageSnowEnabled: cfg.page_snow_enabled === 1,
+    pageSnowEnabled: cfg.page_snow_enabled === 1 || cfg.page_effect === 'snow',
+    pageEffect: cfg.page_effect || (cfg.page_snow_enabled === 1 ? 'snow' : 'none'),
+    pageEffectColor: cfg.page_effect_color || '',
+    pageEffectIntensity: cfg.page_effect_intensity || 'medium',
     playerDecoration: cfg.player_decoration || 'none',
     playerDecorationAnimated: cfg.player_decoration_animated !== 0,
     playerCustomColor: cfg.player_custom_color || '',
@@ -670,7 +673,10 @@ router.get('/now-playing-audio', (req, res) => {
 
   // Visual settings that always apply regardless of playback state
   const visualConfig = {
-    pageSnowEnabled: cfg.page_snow_enabled === 1,
+    pageSnowEnabled: cfg.page_snow_enabled === 1 || cfg.page_effect === 'snow',
+    pageEffect: cfg.page_effect || (cfg.page_snow_enabled === 1 ? 'snow' : 'none'),
+    pageEffectColor: cfg.page_effect_color || '',
+    pageEffectIntensity: cfg.page_effect_intensity || 'medium',
     playerDecoration: cfg.player_decoration || 'none',
     playerDecorationAnimated: cfg.player_decoration_animated !== 0,
     playerCustomColor: cfg.player_custom_color || '',

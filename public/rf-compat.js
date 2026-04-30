@@ -756,105 +756,432 @@
   // status pill while audio keeps playing.
   // ============================================================
   // ============================================================
-  // PAGE-WIDE SNOW — gently falling snowflakes across the viewer page
-  // Toggleable live via admin Viewer Page tab — polls /api/visual-config
-  // every 5 seconds and creates/destroys the snow layer accordingly.
-  // pointer-events:none so it doesn't block clicks. Auto-disabled when
-  // prefers-reduced-motion is set at the OS level.
   // ============================================================
-  (function initPageSnow() {
+  // PAGE EFFECTS — full-screen ambient overlays (snow, leaves,
+  // fireworks, hearts, stars, bats, confetti, petals, embers,
+  // bubbles, rain — plus 'none').
+  //
+  // Three knobs from the server:
+  //   pageEffect          — string id (see EFFECTS table below)
+  //   pageEffectColor     — '' for the effect's default, or any CSS color
+  //   pageEffectIntensity — 'subtle' | 'medium' | 'heavy'
+  //
+  // Engine contract: each effect declares { name, defaultColor, build }.
+  // build(layer, color, count) populates `layer` with absolutely-positioned
+  // children using whatever animations the effect needs. The engine
+  // handles the layer container, lifecycle (start/stop/swap), and
+  // prefers-reduced-motion respect. Effects don't need to clean up — when
+  // we swap, we drop the whole layer and rebuild.
+  //
+  // Backward compat: bootstrap.pageSnowEnabled is mapped to pageEffect='snow'
+  // by the server, so old templates that hardcoded that name keep working.
+  //
+  // pointer-events:none on the layer so it never blocks clicks. z-index
+  // sits above page background but below the player bar.
+  // ============================================================
+  (function initPageEffects() {
     const prefersReduced = window.matchMedia &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (prefersReduced) return; // nothing we can do — respect the setting always
+    if (prefersReduced) return; // respect OS-level motion preference always
 
-    let snowLayer = null;
-    let snowStyleEl = null;
+    let layer = null;
+    let styleEl = null;
+    // Track last-applied state to avoid pointless rebuilds. The poll runs
+    // every 5s; if nothing changed we skip the DOM churn (and the visual
+    // restart of the animations).
+    let last = { name: null, color: null, intensity: null };
 
-    // CSS keyframes go in once and stay (no harm leaving them present)
-    function ensureSnowStyle() {
-      if (snowStyleEl) return;
-      snowStyleEl = document.createElement('style');
-      snowStyleEl.textContent = `
-        @keyframes ofPageSnowFall {
+    // ============================================================
+    // KEYFRAMES — emitted once, shared across all effects. We don't
+    // namespace per-effect because most fall/drift effects share the
+    // same fall + sway pattern; keeping it DRY makes the file shorter.
+    // ============================================================
+    function ensureStyle() {
+      if (styleEl) return;
+      styleEl = document.createElement('style');
+      styleEl.textContent = `
+        @keyframes ofPageFall {
           0%   { transform: translateY(-30px) rotate(0deg); }
-          100% { transform: translateY(105vh) rotate(360deg); }
+          100% { transform: translateY(108vh) rotate(360deg); }
         }
-        @keyframes ofPageSnowSway {
+        @keyframes ofPageDrift {
+          0%   { transform: translateY(-30px) rotate(-25deg); }
+          100% { transform: translateY(108vh) rotate(335deg); }
+        }
+        @keyframes ofPageSway {
           0%   { margin-left: 0; }
-          100% { margin-left: var(--of-sway); }
+          100% { margin-left: var(--of-sway, 30px); }
+        }
+        @keyframes ofPageRise {
+          0%   { transform: translateY(110vh) rotate(0deg); opacity: 0; }
+          10%  { opacity: var(--of-peak-opacity, 0.8); }
+          90%  { opacity: var(--of-peak-opacity, 0.8); }
+          100% { transform: translateY(-30px) rotate(360deg); opacity: 0; }
+        }
+        @keyframes ofPageTwinkle {
+          0%, 100% { opacity: 0.2; transform: scale(0.8); }
+          50%      { opacity: 1;   transform: scale(1.1); }
+        }
+        @keyframes ofPageBatFly {
+          0%   { transform: translateX(-12vw) translateY(0); }
+          100% { transform: translateX(112vw) translateY(var(--of-bat-dy, 8vh)); }
+        }
+        @keyframes ofPageBatFlap {
+          0%, 100% { transform: scaleY(1); }
+          50%      { transform: scaleY(0.55); }
+        }
+        @keyframes ofPageRain {
+          0%   { transform: translateY(-30vh); }
+          100% { transform: translateY(108vh); }
+        }
+        @keyframes ofPageBurst {
+          0%   { transform: scale(0); opacity: 0; }
+          10%  { opacity: 1; }
+          70%  { opacity: 1; }
+          100% { transform: scale(1); opacity: 0; }
         }
       `;
-      document.head.appendChild(snowStyleEl);
+      document.head.appendChild(styleEl);
     }
 
-    function startSnow() {
-      if (snowLayer) return; // already running
-      ensureSnowStyle();
-      snowLayer = document.createElement('div');
-      snowLayer.id = 'of-page-snow';
-      snowLayer.setAttribute('aria-hidden', 'true');
-      snowLayer.style.cssText = `
-        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        pointer-events: none; z-index: 9990; overflow: hidden;
-      `;
-      const flakeSvg = `<svg viewBox="0 0 14 14" xmlns="http://www.w3.org/2000/svg">
-        <g stroke="#ffffff" stroke-width="0.8" stroke-linecap="round" fill="none" opacity="0.9">
-          <line x1="7" y1="1" x2="7" y2="13"/>
-          <line x1="1" y1="7" x2="13" y2="7"/>
-          <line x1="2.5" y1="2.5" x2="11.5" y2="11.5"/>
-          <line x1="2.5" y1="11.5" x2="11.5" y2="2.5"/>
-          <path d="M 7,2 L 6,3 M 7,2 L 8,3"/>
-          <path d="M 7,12 L 6,11 M 7,12 L 8,11"/>
-          <path d="M 2,7 L 3,6 M 2,7 L 3,8"/>
-          <path d="M 12,7 L 11,6 M 12,7 L 11,8"/>
-        </g>
-      </svg>`;
-      const flakeCount = 50;
-      for (let i = 0; i < flakeCount; i++) {
-        const flake = document.createElement('div');
-        const size = 8 + Math.random() * 14;
-        const left = Math.random() * 100;
-        const duration = 8 + Math.random() * 10;
-        const delay = -Math.random() * duration;
-        const sway = 20 + Math.random() * 40;
-        const opacity = 0.4 + Math.random() * 0.5;
-        flake.style.cssText = `
-          position: absolute;
-          left: ${left}vw;
-          top: -30px;
-          width: ${size}px;
-          height: ${size}px;
-          opacity: ${opacity};
-          filter: drop-shadow(0 0 2px rgba(255,255,255,0.4));
-          animation: ofPageSnowFall ${duration}s linear infinite,
-                     ofPageSnowSway ${duration / 2}s ease-in-out infinite alternate;
-          animation-delay: ${delay}s, ${delay}s;
-          --of-sway: ${sway}px;
-        `;
-        flake.innerHTML = flakeSvg;
-        snowLayer.appendChild(flake);
+    // ============================================================
+    // INTENSITY MAPS — per-effect particle counts.
+    // Heavier effects (fireworks, bats) ship fewer at "heavy" than
+    // small confetti would, because each is bigger / more visually loud.
+    // ============================================================
+    const COUNTS = {
+      // [subtle, medium, heavy]
+      snow:      [25, 50, 90],
+      leaves:    [15, 30, 55],
+      fireworks: [3,  6,  12],
+      hearts:    [20, 40, 70],
+      stars:     [30, 60, 110],
+      bats:      [3,  6,  10],
+      confetti:  [40, 80, 140],
+      petals:    [20, 40, 70],
+      embers:    [25, 50, 90],
+      bubbles:   [15, 30, 55],
+      rain:      [60, 120, 200],
+    };
+    function pickCount(name, intensity) {
+      const arr = COUNTS[name];
+      if (!arr) return 0;
+      const idx = intensity === 'subtle' ? 0 : intensity === 'heavy' ? 2 : 1;
+      return arr[idx];
+    }
+
+    // ============================================================
+    // EFFECT DEFINITIONS — each is { defaultColor, build(layer, color, count) }.
+    // `color` is always a non-empty string here (the engine substitutes
+    // defaultColor when the admin left the override blank).
+    //
+    // Each effect creates absolutely-positioned children inside `layer`.
+    // Random number tweaks aim for "feels alive" not "looks identical".
+    // ============================================================
+    const EFFECTS = {
+      // ---------- SNOW ----------
+      snow: {
+        defaultColor: '#ffffff',
+        build(root, color, count) {
+          const flakeSvg = (col) => `<svg viewBox="0 0 14 14" xmlns="http://www.w3.org/2000/svg"><g stroke="${col}" stroke-width="0.8" stroke-linecap="round" fill="none" opacity="0.9"><line x1="7" y1="1" x2="7" y2="13"/><line x1="1" y1="7" x2="13" y2="7"/><line x1="2.5" y1="2.5" x2="11.5" y2="11.5"/><line x1="2.5" y1="11.5" x2="11.5" y2="2.5"/><path d="M 7,2 L 6,3 M 7,2 L 8,3"/><path d="M 7,12 L 6,11 M 7,12 L 8,11"/><path d="M 2,7 L 3,6 M 2,7 L 3,8"/><path d="M 12,7 L 11,6 M 12,7 L 11,8"/></g></svg>`;
+          const svgMarkup = flakeSvg(color);
+          for (let i = 0; i < count; i++) {
+            const flake = document.createElement('div');
+            const size = 8 + Math.random() * 14;
+            const left = Math.random() * 100;
+            const duration = 8 + Math.random() * 10;
+            const delay = -Math.random() * duration;
+            const sway = 20 + Math.random() * 40;
+            const opacity = 0.4 + Math.random() * 0.5;
+            flake.style.cssText = `position:absolute;left:${left}vw;top:-30px;width:${size}px;height:${size}px;opacity:${opacity};filter:drop-shadow(0 0 2px ${color}66);animation:ofPageFall ${duration}s linear infinite, ofPageSway ${duration / 2}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            flake.innerHTML = svgMarkup;
+            root.appendChild(flake);
+          }
+        },
+      },
+
+      // ---------- LEAVES ---------- (autumn maple-like silhouettes)
+      leaves: {
+        defaultColor: '#d2691e',
+        build(root, color, count) {
+          // Random palette around the chosen color so leaves look varied.
+          // We render one default svg shape and tint it via CSS filter for
+          // the "varied colors" feel without bloating the markup.
+          const leafSvg = (col) => `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2 C8 4, 4 8, 4 13 C4 18, 8 22, 12 22 C16 22, 20 18, 20 13 C20 8, 16 4, 12 2 Z M12 4 L12 22" fill="${col}" stroke="${col}" stroke-width="0.5"/></svg>`;
+          for (let i = 0; i < count; i++) {
+            const leaf = document.createElement('div');
+            const size = 16 + Math.random() * 18;
+            const left = Math.random() * 100;
+            const duration = 10 + Math.random() * 12;
+            const delay = -Math.random() * duration;
+            const sway = 60 + Math.random() * 80;
+            const opacity = 0.55 + Math.random() * 0.4;
+            // Vary the hue a little: ±20deg rotation gives autumnal range
+            const hueShift = Math.round(-20 + Math.random() * 40);
+            leaf.style.cssText = `position:absolute;left:${left}vw;top:-30px;width:${size}px;height:${size}px;opacity:${opacity};filter:hue-rotate(${hueShift}deg) drop-shadow(0 1px 2px rgba(0,0,0,0.3));animation:ofPageDrift ${duration}s linear infinite, ofPageSway ${duration / 2.5}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            leaf.innerHTML = leafSvg(color);
+            root.appendChild(leaf);
+          }
+        },
+      },
+
+      // ---------- FIREWORKS ---------- (radial bursts at random positions)
+      fireworks: {
+        defaultColor: '#ff5050',
+        build(root, color, count) {
+          // Each "firework" is a burst of N small dots radiating from a center.
+          // We stagger their delays so the sky doesn't fire all at once.
+          const sparksPerBurst = 14;
+          for (let i = 0; i < count; i++) {
+            const burst = document.createElement('div');
+            const cx = 10 + Math.random() * 80; // vw
+            const cy = 8 + Math.random() * 50;  // vh — keep above the fold mostly
+            const burstDuration = 1.6 + Math.random() * 1.2;
+            const cycle = 4 + Math.random() * 5;
+            const cycleDelay = Math.random() * cycle;
+            // Vary color slightly via hue-rotate on each spark's filter
+            const baseHue = Math.round(Math.random() * 360);
+            burst.style.cssText = `position:absolute;left:${cx}vw;top:${cy}vh;width:0;height:0;`;
+            for (let s = 0; s < sparksPerBurst; s++) {
+              const angle = (s / sparksPerBurst) * Math.PI * 2;
+              const dist = 60 + Math.random() * 50;
+              const dx = Math.cos(angle) * dist;
+              const dy = Math.sin(angle) * dist;
+              const spark = document.createElement('div');
+              spark.style.cssText = `position:absolute;left:0;top:0;width:6px;height:6px;border-radius:50%;background:${color};filter:hue-rotate(${baseHue}deg) drop-shadow(0 0 6px ${color});transform-origin:0 0;animation:sparkFly_${i}_${s} ${cycle}s ease-out infinite;animation-delay:${cycleDelay}s;`;
+              const styleId = `ofSpark_${i}_${s}`;
+              const style = document.createElement('style');
+              style.textContent = `@keyframes sparkFly_${i}_${s} { 0%,${(burstDuration/cycle*100).toFixed(0)}% { transform: translate(0,0); opacity: 1; } ${(burstDuration/cycle*100*0.6).toFixed(0)}% { opacity: 1; } ${(burstDuration/cycle*100).toFixed(0)}% { transform: translate(${dx}px,${dy}px); opacity: 0; } 100% { transform: translate(${dx}px,${dy}px); opacity: 0; } }`;
+              root.appendChild(style);
+              burst.appendChild(spark);
+            }
+            root.appendChild(burst);
+          }
+        },
+      },
+
+      // ---------- HEARTS ----------
+      hearts: {
+        defaultColor: '#ff4d8d',
+        build(root, color, count) {
+          const heartSvg = (col) => `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 21 C 12 21, 4 14, 4 8.5 C 4 5, 6.5 3, 9 3 C 10.5 3, 12 4, 12 5.5 C 12 4, 13.5 3, 15 3 C 17.5 3, 20 5, 20 8.5 C 20 14, 12 21, 12 21 Z" fill="${col}" stroke="${col}" stroke-width="0.5"/></svg>`;
+          const svgMarkup = heartSvg(color);
+          for (let i = 0; i < count; i++) {
+            const heart = document.createElement('div');
+            const size = 12 + Math.random() * 18;
+            const left = Math.random() * 100;
+            const duration = 10 + Math.random() * 8;
+            const delay = -Math.random() * duration;
+            const sway = 30 + Math.random() * 50;
+            const opacity = 0.5 + Math.random() * 0.4;
+            heart.style.cssText = `position:absolute;left:${left}vw;top:110vh;width:${size}px;height:${size}px;--of-peak-opacity:${opacity};filter:drop-shadow(0 0 4px ${color}77);animation:ofPageRise ${duration}s linear infinite, ofPageSway ${duration / 2.5}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            heart.innerHTML = svgMarkup;
+            root.appendChild(heart);
+          }
+        },
+      },
+
+      // ---------- STARS ---------- (twinkling, fixed positions)
+      stars: {
+        defaultColor: '#fff5b3',
+        build(root, color, count) {
+          for (let i = 0; i < count; i++) {
+            const star = document.createElement('div');
+            const size = 2 + Math.random() * 3;
+            const left = Math.random() * 100;
+            const top = Math.random() * 95;
+            const duration = 1.5 + Math.random() * 3;
+            const delay = -Math.random() * duration;
+            star.style.cssText = `position:absolute;left:${left}vw;top:${top}vh;width:${size}px;height:${size}px;border-radius:50%;background:${color};box-shadow:0 0 ${size * 2}px ${color};animation:ofPageTwinkle ${duration}s ease-in-out infinite;animation-delay:${delay}s;`;
+            root.appendChild(star);
+          }
+        },
+      },
+
+      // ---------- BATS ---------- (silhouettes flying horizontally)
+      bats: {
+        defaultColor: '#1a0033',
+        build(root, color, count) {
+          const batSvg = (col) => `<svg viewBox="0 0 32 18" xmlns="http://www.w3.org/2000/svg"><path d="M16 5 L13 2 L11 4 L8 2 L5 4 L2 5 L0 9 L4 8 L7 11 L11 9 L13 12 L16 10 L19 12 L21 9 L25 11 L28 8 L32 9 L30 5 L27 4 L24 2 L21 4 L19 2 Z" fill="${col}"/></svg>`;
+          const svgMarkup = batSvg(color);
+          for (let i = 0; i < count; i++) {
+            const bat = document.createElement('div');
+            const size = 24 + Math.random() * 18;
+            const top = 5 + Math.random() * 60;
+            const duration = 10 + Math.random() * 8;
+            const delay = -Math.random() * duration;
+            const dy = -8 + Math.random() * 16; // ± vertical drift across screen
+            const flapDuration = 0.25 + Math.random() * 0.2;
+            // Outer animates the horizontal+vertical sweep; inner animates the flap.
+            // We achieve "two transforms at once" by nesting: the outer translate is
+            // a separate element from the inner scaleY.
+            const inner = document.createElement('div');
+            inner.style.cssText = `width:${size}px;height:${size * 9 / 16}px;animation:ofPageBatFlap ${flapDuration}s ease-in-out infinite;`;
+            inner.innerHTML = svgMarkup;
+            bat.style.cssText = `position:absolute;left:0;top:${top}vh;animation:ofPageBatFly ${duration}s linear infinite;animation-delay:${delay}s;--of-bat-dy:${dy}vh;`;
+            bat.appendChild(inner);
+            root.appendChild(bat);
+          }
+        },
+      },
+
+      // ---------- CONFETTI ---------- (rectangular bits, multi-color)
+      confetti: {
+        defaultColor: '#ff4d4d',
+        build(root, color, count) {
+          for (let i = 0; i < count; i++) {
+            const piece = document.createElement('div');
+            const w = 4 + Math.random() * 6;
+            const h = 8 + Math.random() * 8;
+            const left = Math.random() * 100;
+            const duration = 5 + Math.random() * 6;
+            const delay = -Math.random() * duration;
+            const sway = 30 + Math.random() * 70;
+            // Vary hue by ±60deg for confetti-rainbow look around the chosen color
+            const hueShift = Math.round(-60 + Math.random() * 120);
+            piece.style.cssText = `position:absolute;left:${left}vw;top:-30px;width:${w}px;height:${h}px;background:${color};filter:hue-rotate(${hueShift}deg);animation:ofPageFall ${duration}s linear infinite, ofPageSway ${duration / 2.5}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            root.appendChild(piece);
+          }
+        },
+      },
+
+      // ---------- PETALS ---------- (cherry blossom / spring)
+      petals: {
+        defaultColor: '#ffb3d1',
+        build(root, color, count) {
+          const petalSvg = (col) => `<svg viewBox="0 0 16 24" xmlns="http://www.w3.org/2000/svg"><path d="M8 1 C 4 6, 2 14, 8 23 C 14 14, 12 6, 8 1 Z" fill="${col}" stroke="${col}" stroke-width="0.3" opacity="0.85"/></svg>`;
+          const svgMarkup = petalSvg(color);
+          for (let i = 0; i < count; i++) {
+            const petal = document.createElement('div');
+            const size = 12 + Math.random() * 12;
+            const left = Math.random() * 100;
+            const duration = 12 + Math.random() * 10;
+            const delay = -Math.random() * duration;
+            const sway = 80 + Math.random() * 100;
+            const opacity = 0.5 + Math.random() * 0.4;
+            petal.style.cssText = `position:absolute;left:${left}vw;top:-30px;width:${size}px;height:${size * 1.5}px;opacity:${opacity};filter:drop-shadow(0 1px 2px rgba(0,0,0,0.2));animation:ofPageDrift ${duration}s linear infinite, ofPageSway ${duration / 3}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            petal.innerHTML = svgMarkup;
+            root.appendChild(petal);
+          }
+        },
+      },
+
+      // ---------- EMBERS ---------- (rising glowing dots)
+      embers: {
+        defaultColor: '#ff7a1a',
+        build(root, color, count) {
+          for (let i = 0; i < count; i++) {
+            const ember = document.createElement('div');
+            const size = 2 + Math.random() * 4;
+            const left = Math.random() * 100;
+            const duration = 6 + Math.random() * 6;
+            const delay = -Math.random() * duration;
+            const sway = 20 + Math.random() * 40;
+            const opacity = 0.6 + Math.random() * 0.4;
+            ember.style.cssText = `position:absolute;left:${left}vw;top:110vh;width:${size}px;height:${size}px;border-radius:50%;background:${color};box-shadow:0 0 ${size * 3}px ${color}aa, 0 0 ${size * 6}px ${color}55;--of-peak-opacity:${opacity};animation:ofPageRise ${duration}s linear infinite, ofPageSway ${duration / 2}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            root.appendChild(ember);
+          }
+        },
+      },
+
+      // ---------- BUBBLES ---------- (rising spheres)
+      bubbles: {
+        defaultColor: '#a0d8ef',
+        build(root, color, count) {
+          for (let i = 0; i < count; i++) {
+            const bubble = document.createElement('div');
+            const size = 14 + Math.random() * 26;
+            const left = Math.random() * 100;
+            const duration = 9 + Math.random() * 8;
+            const delay = -Math.random() * duration;
+            const sway = 25 + Math.random() * 50;
+            const opacity = 0.3 + Math.random() * 0.4;
+            bubble.style.cssText = `position:absolute;left:${left}vw;top:110vh;width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 30% 30%, ${color}cc, ${color}55 70%, ${color}11 100%);border:1px solid ${color}88;--of-peak-opacity:${opacity};animation:ofPageRise ${duration}s linear infinite, ofPageSway ${duration / 2.5}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            root.appendChild(bubble);
+          }
+        },
+      },
+
+      // ---------- RAIN ---------- (vertical streaks)
+      rain: {
+        defaultColor: '#a8c5e0',
+        build(root, color, count) {
+          for (let i = 0; i < count; i++) {
+            const drop = document.createElement('div');
+            const left = Math.random() * 100;
+            const len = 12 + Math.random() * 20;
+            const duration = 0.5 + Math.random() * 0.7;
+            const delay = -Math.random() * duration;
+            const opacity = 0.25 + Math.random() * 0.45;
+            drop.style.cssText = `position:absolute;left:${left}vw;top:0;width:1px;height:${len}px;background:linear-gradient(to bottom, ${color}00, ${color});opacity:${opacity};animation:ofPageRain ${duration}s linear infinite;animation-delay:${delay}s;`;
+            root.appendChild(drop);
+          }
+        },
+      },
+    };
+
+    // ============================================================
+    // ENGINE — applyEffect drives the whole thing.
+    // ============================================================
+    function buildLayer() {
+      ensureStyle();
+      const el = document.createElement('div');
+      el.id = 'of-page-effects';
+      el.setAttribute('aria-hidden', 'true');
+      el.style.cssText = `position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:9990;overflow:hidden;`;
+      return el;
+    }
+
+    function teardown() {
+      if (layer) { layer.remove(); layer = null; }
+    }
+
+    // Public-ish API. The visual-config poll calls this every 5s; if the
+    // tuple (name, color, intensity) hasn't changed, we no-op.
+    function applyEffect(rawName, rawColor, rawIntensity) {
+      const name = String(rawName || 'none').toLowerCase();
+      const intensity = (rawIntensity === 'subtle' || rawIntensity === 'heavy') ? rawIntensity : 'medium';
+      const color = (rawColor && String(rawColor).trim()) || '';
+
+      // Skip rebuild if nothing changed since last apply
+      if (last.name === name && last.color === color && last.intensity === intensity) return;
+      last = { name, color, intensity };
+
+      teardown();
+      const def = EFFECTS[name];
+      if (!def) return; // 'none' or unknown — leave the page bare
+
+      const effectiveColor = color || def.defaultColor;
+      const count = pickCount(name, intensity);
+      if (count <= 0) return;
+
+      layer = buildLayer();
+      try {
+        def.build(layer, effectiveColor, count);
+        document.body.appendChild(layer);
+      } catch (err) {
+        // Effect crashed — fail silent, leave page clean
+        teardown();
       }
-      document.body.appendChild(snowLayer);
     }
 
-    function stopSnow() {
-      if (!snowLayer) return;
-      snowLayer.remove();
-      snowLayer = null;
-    }
-
-    // Apply server-provided state
-    function applySnowState(enabled) {
-      if (enabled) startSnow();
-      else stopSnow();
-    }
-
-    // Apply initial state from bootstrap (no flicker on first load if enabled)
+    // Apply initial state from the bootstrap blob, with backward-compat
+    // for the old pageSnowEnabled boolean (an older server / older template
+    // bundle might still set it but not the new keys).
     const bootstrap = window.__SHOWPILOT__ || {};
-    applySnowState(bootstrap.pageSnowEnabled);
+    const initialName = bootstrap.pageEffect != null
+      ? bootstrap.pageEffect
+      : (bootstrap.pageSnowEnabled ? 'snow' : 'none');
+    applyEffect(initialName, bootstrap.pageEffectColor || '', bootstrap.pageEffectIntensity || 'medium');
 
-    // Expose so the unified visual-config poll (below) can drive snow updates
-    window._ofApplySnowState = applySnowState;
+    // Expose so the unified visual-config poll (below) can drive updates
+    window._ofApplyEffect = applyEffect;
+    // Backward-compat shim: any caller still toggling _ofApplySnowState
+    // gets routed through the new engine. Older RF-style templates might
+    // poke this; preserving it is cheap.
+    window._ofApplySnowState = function (enabled) {
+      applyEffect(enabled ? 'snow' : 'none', '', 'medium');
+    };
   })();
 
   // ============================================================
@@ -873,7 +1200,16 @@
         const r = await fetch('/api/visual-config?gateCheck=mode', { credentials: 'include' });
         if (r.ok) {
           const data = await r.json();
-          if (typeof window._ofApplySnowState === 'function') {
+          if (typeof window._ofApplyEffect === 'function') {
+            // New three-knob API. Server sends pageEffect/Color/Intensity.
+            // Falls back to legacy pageSnowEnabled boolean if the server
+            // is older and only sends that.
+            const name = data.pageEffect != null
+              ? data.pageEffect
+              : (data.pageSnowEnabled ? 'snow' : 'none');
+            window._ofApplyEffect(name, data.pageEffectColor || '', data.pageEffectIntensity || 'medium');
+          } else if (typeof window._ofApplySnowState === 'function') {
+            // Pre-engine viewer (e.g. an older rf-compat.js on a stale tab) — keep working.
             window._ofApplySnowState(!!data.pageSnowEnabled);
           }
           applyAudioGateState(!!data.audioGateBlocked, data.audioGateReason || '');

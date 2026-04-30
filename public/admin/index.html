@@ -1824,7 +1824,7 @@
           <rect class="lp" x="8"   y="-3"  width="5" height="5" rx="1"/>
         </svg>
         <span class="app-brand-text">ShowPilot</span>
-        <span class="app-version">v0.31.1</span>
+        <span class="app-version">v0.32.0</span>
       </span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
@@ -2485,12 +2485,51 @@
           </div>
 
           <h3 style="margin-top: 1.25rem;">Page-wide effects</h3>
-          <div class="row">
-            <input type="checkbox" id="cfg_page_snow_enabled" onchange="saveSetting('page_snow_enabled', this.checked ? 1 : 0)" />
-            <label for="cfg_page_snow_enabled" style="margin: 0;">❄️ Snow falling across the viewer page</label>
+          <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+            Pick an ambient effect that drifts, falls, or twinkles across the entire viewer page.
+            Visitors with the reduced-motion accessibility setting see nothing — animation is opt-in
+            at the OS level.
+          </p>
+          <div class="grid-2" style="margin-bottom: 0.75rem;">
+            <div>
+              <label for="cfg_page_effect">Effect</label>
+              <select id="cfg_page_effect" onchange="saveSetting('page_effect', this.value); updatePageEffectColorPlaceholder();">
+                <option value="none">None</option>
+                <option value="snow">❄️ Snow</option>
+                <option value="leaves">🍂 Leaves</option>
+                <option value="fireworks">🎆 Fireworks</option>
+                <option value="hearts">💗 Hearts</option>
+                <option value="stars">✨ Twinkling stars</option>
+                <option value="bats">🦇 Bats</option>
+                <option value="confetti">🎉 Confetti</option>
+                <option value="petals">🌸 Petals</option>
+                <option value="embers">🔥 Embers</option>
+                <option value="bubbles">🫧 Bubbles</option>
+                <option value="rain">🌧️ Rain</option>
+              </select>
+            </div>
+            <div>
+              <label for="cfg_page_effect_intensity">Intensity</label>
+              <select id="cfg_page_effect_intensity" onchange="saveSetting('page_effect_intensity', this.value)">
+                <option value="subtle">Subtle</option>
+                <option value="medium">Medium</option>
+                <option value="heavy">Heavy</option>
+              </select>
+            </div>
           </div>
-          <p class="muted" style="font-size: 0.8rem; margin: 0.25rem 0 0;">
-            50 snowflakes drift down across the entire page. Doesn't block clicks. Visitors with reduced-motion accessibility setting won't see animations.
+          <div class="row" style="gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+            <label for="cfg_page_effect_color" style="margin: 0;">Color tint</label>
+            <input type="color" id="cfg_page_effect_color_picker"
+                   onchange="onPageEffectColorPick(this.value)"
+                   style="width: 44px; height: 32px; padding: 2px; border: 1px solid var(--border); border-radius: 4px;" />
+            <input type="text" id="cfg_page_effect_color" placeholder="(default)"
+                   onchange="saveSetting('page_effect_color', this.value); syncPageEffectColorPicker();"
+                   style="width: 110px; font-family: monospace;" />
+            <button type="button" class="secondary" onclick="resetPageEffectColor()" style="font-size: 0.85rem;">Use default</button>
+          </div>
+          <p class="muted" style="font-size: 0.8rem; margin: 0.5rem 0 0;">
+            Each effect has a sensible default color (snow=white, leaves=orange, hearts=pink, etc).
+            Leave the color blank or click "Use default" to use it; otherwise pick any CSS color.
           </p>
         </div>
 
@@ -4464,7 +4503,18 @@
       setVal('cfg_public_base_url', c.public_base_url || '');
       setVal('cfg_player_decoration', c.player_decoration || 'none');
       setChk('cfg_player_decoration_animated', c.player_decoration_animated);
-      setChk('cfg_page_snow_enabled', c.page_snow_enabled);
+      // Page-wide effect controls (v0.32.0+). Reads from the new
+      // page_effect/color/intensity columns; falls back to the legacy
+      // page_snow_enabled if those aren't populated yet (e.g. install
+      // upgraded mid-conversation, or backup from an older version).
+      const effectName = (c.page_effect && c.page_effect !== 'none')
+        ? c.page_effect
+        : (c.page_snow_enabled ? 'snow' : 'none');
+      setVal('cfg_page_effect', effectName);
+      setVal('cfg_page_effect_color', c.page_effect_color || '');
+      setVal('cfg_page_effect_intensity', c.page_effect_intensity || 'medium');
+      syncPageEffectColorPicker();
+      updatePageEffectColorPlaceholder();
       loadCustomColorState(c.player_custom_color || '');
       updatePlayerCustomColorVisibility();
       // Listen-on-phone launcher button
@@ -4787,6 +4837,66 @@
       const row = document.getElementById('cfg_player_custom_color_row');
       if (!sel || !row) return;
       row.style.display = (sel.value === 'none') ? '' : 'none';
+    }
+
+    // ---- Page effect color helpers (v0.32.0+) ----
+    // Defaults match the rf-compat.js EFFECTS table — keep in sync.
+    const PAGE_EFFECT_DEFAULT_COLORS = {
+      none: '',
+      snow: '#ffffff',
+      leaves: '#d2691e',
+      fireworks: '#ff5050',
+      hearts: '#ff4d8d',
+      stars: '#fff5b3',
+      bats: '#1a0033',
+      confetti: '#ff4d4d',
+      petals: '#ffb3d1',
+      embers: '#ff7a1a',
+      bubbles: '#a0d8ef',
+      rain: '#a8c5e0',
+    };
+
+    // Color picker → text field. Picker emits hex; the text field is the
+    // saved value, so we route the picker through the text-save path.
+    function onPageEffectColorPick(hex) {
+      const text = document.getElementById('cfg_page_effect_color');
+      if (!text) return;
+      text.value = hex;
+      saveSetting('page_effect_color', hex);
+    }
+    // Text field changed → keep picker in sync. Only valid hex updates the
+    // picker; anything else (rgb(), named colors, empty) leaves it alone.
+    function syncPageEffectColorPicker() {
+      const text = document.getElementById('cfg_page_effect_color');
+      const picker = document.getElementById('cfg_page_effect_color_picker');
+      if (!text || !picker) return;
+      const v = (text.value || '').trim();
+      if (/^#[0-9a-fA-F]{6}$/.test(v)) {
+        picker.value = v;
+      } else {
+        // Use whatever default this effect has so picker isn't visually misleading
+        const eff = (document.getElementById('cfg_page_effect') || {}).value || 'none';
+        const def = PAGE_EFFECT_DEFAULT_COLORS[eff] || '#ffffff';
+        if (def && /^#[0-9a-fA-F]{6}$/.test(def)) picker.value = def;
+      }
+    }
+    // Show the effect's default color in the text field's placeholder so
+    // admins can see what blank means.
+    function updatePageEffectColorPlaceholder() {
+      const eff = (document.getElementById('cfg_page_effect') || {}).value || 'none';
+      const text = document.getElementById('cfg_page_effect_color');
+      if (!text) return;
+      const def = PAGE_EFFECT_DEFAULT_COLORS[eff];
+      text.placeholder = def ? `(default: ${def})` : '(default)';
+      syncPageEffectColorPicker();
+    }
+    // "Use default" button — clear the override.
+    function resetPageEffectColor() {
+      const text = document.getElementById('cfg_page_effect_color');
+      if (!text) return;
+      text.value = '';
+      saveSetting('page_effect_color', '');
+      syncPageEffectColorPicker();
     }
 
     // ---- Custom player color (solid + gradient) ----
