@@ -133,6 +133,22 @@ app.use('/api/admin', adminRouter);
 // ShowPilot-Lite, because main has to work in Docker too.
 app.use('/api/admin/cloudflared', adminRouter.requireAdmin, require('./routes/cloudflared'));
 
+// In-app updater endpoints (v0.33.0+). Same sibling pattern as backup
+// and cloudflared. The router itself handles the Docker/demoMode
+// gating internally — it returns 503 with an explanation rather than
+// being absent, so the UI can render an informative state.
+app.use('/api/admin/updates', adminRouter.requireAdmin, require('./routes/updates'));
+
+// Start background polling for new releases. Best-effort; if it
+// errors we just don't update the cached "latest" until the next
+// successful poll. Skipped when the updater is unavailable
+// (Docker, demoMode) — we still want the UI to show "you're on
+// vX.Y.Z" but no need to hit GitHub from those deployments.
+const updater = require('./lib/updater');
+if (updater.isUpdaterAvailable()) {
+  updater.startBackgroundPolling();
+}
+
 // Public viewer API
 app.use('/api', require('./routes/viewer'));
 

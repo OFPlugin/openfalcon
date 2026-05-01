@@ -1824,7 +1824,7 @@
           <rect class="lp" x="8"   y="-3"  width="5" height="5" rx="1"/>
         </svg>
         <span class="app-brand-text">ShowPilot</span>
-        <span class="app-version">v0.32.14</span>
+        <span class="app-version">v0.33.0</span>
       </span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
@@ -2632,6 +2632,7 @@
             <div class="sub-tab" data-subtab="safeguards" onclick="switchTab('safeguards')">Interaction Safeguards</div>
             <div class="sub-tab" data-subtab="public-access" onclick="switchTab('public-access')">Public Access</div>
             <div class="sub-tab" data-subtab="backup" onclick="switchTab('backup')">Backup &amp; Restore</div>
+            <div class="sub-tab" data-subtab="updates" onclick="switchTab('updates')">Updates</div>
           </div>
 
           <!-- GENERAL SETTINGS — applies to all templates -->
@@ -3123,6 +3124,28 @@
 
             <!-- The inspect/policies UI gets injected here -->
             <div id="restorePoliciesArea" style="display: none; margin-top: 1rem;"></div>
+          </div>
+
+          <!-- UPDATES — in-app update from GitHub releases (v0.33.0+) -->
+          <div class="sub-tab-pane" data-subtab="updates">
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+              Pull the latest release of ShowPilot from GitHub and apply it
+              automatically. Your data and config are preserved. A snapshot
+              of <code>data/</code> is taken before each update so you can
+              roll back if needed.
+            </p>
+
+            <div id="updateStatusBox" style="padding: 0.75rem; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 0.75rem;">
+              <div class="muted" style="font-size: 0.8rem;">Loading update status…</div>
+            </div>
+
+            <div id="updateActionRow" style="display: none; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+              <button id="updateCheckBtn" class="secondary" onclick="checkForUpdates()">Check for updates</button>
+              <button id="updateApplyBtn" onclick="applyUpdate()" style="display: none;">Update now</button>
+              <button id="updateRollbackBtn" class="secondary" onclick="rollbackUpdate()" style="display: none;">Roll back to previous version</button>
+            </div>
+
+            <div id="updateActionStatus" class="muted" style="margin-top: 0.75rem; font-size: 0.85rem;"></div>
           </div>
         </div>
 
@@ -3908,6 +3931,212 @@
           status.textContent = 'Export failed: ' + err.message;
           showAlert('Export failed: ' + err.message);
         });
+    }
+
+    // ============================================================
+    // Settings → Updates (v0.33.0+)
+    // ============================================================
+    // The Updates pane shows current version, latest available version,
+    // and an Update button (or rollback button when previous-version
+    // state exists). Loaded lazily on first switch into the pane to
+    // avoid hitting GitHub on every admin page load — refreshUpdateStatus
+    // hits the cached server-side check, which is itself rate-limited.
+
+    let updatesLoadedOnce = false;
+
+    async function refreshUpdateStatus({ force = false } = {}) {
+      const box = document.getElementById('updateStatusBox');
+      const actionRow = document.getElementById('updateActionRow');
+      const applyBtn = document.getElementById('updateApplyBtn');
+      const rollbackBtn = document.getElementById('updateRollbackBtn');
+
+      if (!box) return;
+      box.innerHTML = '<div class="muted" style="font-size: 0.8rem;">Checking for updates…</div>';
+
+      try {
+        const url = force ? '/api/admin/updates/check' : '/api/admin/updates/status';
+        const r = await fetch(url, {
+          method: force ? 'POST' : 'GET',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+
+        // Build the status header.
+        let statusHtml = '';
+        statusHtml += `<div><strong>Current version:</strong> v${escapeHtml(data.currentVersion)}</div>`;
+        if (data.latestVersion) {
+          statusHtml += `<div><strong>Latest version:</strong> ${escapeHtml(data.latestVersion)}`;
+          if (data.latestRelease && data.latestRelease.url) {
+            statusHtml += ` &middot; <a href="${escapeAttr(data.latestRelease.url)}" target="_blank" rel="noopener">release notes</a>`;
+          }
+          statusHtml += '</div>';
+        } else {
+          statusHtml += '<div class="muted" style="font-size: 0.85rem;">Latest version: unknown';
+          if (data.lastCheckError) {
+            statusHtml += ` (${escapeHtml(data.lastCheckError)})`;
+          }
+          statusHtml += '</div>';
+        }
+
+        // Status pill — up to date / available / unavailable here.
+        if (data.updateAvailable) {
+          statusHtml += `<div style="margin-top: 0.5rem;"><span class="pill pill-warning">Update available</span></div>`;
+        } else if (data.latestVersion) {
+          statusHtml += `<div style="margin-top: 0.5rem;"><span class="pill pill-success">Up to date</span></div>`;
+        }
+
+        // Deployment-specific notes.
+        if (data.isDocker) {
+          statusHtml += `<div class="muted" style="font-size: 0.85rem; margin-top: 0.5rem;">
+            This container is managed by its host (e.g. Watchtower). Updates apply automatically when a new image is published — the in-app updater is disabled here.
+          </div>`;
+        } else if (data.isDemoMode) {
+          statusHtml += `<div class="muted" style="font-size: 0.85rem; margin-top: 0.5rem;">
+            In-app updates are disabled in demo mode.
+          </div>`;
+        }
+
+        if (data.lastCheckAt) {
+          const t = new Date(data.lastCheckAt).toLocaleString();
+          statusHtml += `<div class="muted" style="font-size: 0.75rem; margin-top: 0.5rem;">Last checked: ${escapeHtml(t)}</div>`;
+        }
+
+        box.innerHTML = statusHtml;
+        actionRow.style.display = 'flex';
+
+        // Show/hide the apply button.
+        if (data.updateAvailable && data.updaterAvailable) {
+          applyBtn.style.display = '';
+          applyBtn.textContent = `Update to ${data.latestVersion}`;
+        } else {
+          applyBtn.style.display = 'none';
+        }
+
+        // Show/hide the rollback button.
+        if (data.rollback && data.updaterAvailable) {
+          rollbackBtn.style.display = '';
+          rollbackBtn.textContent = `Roll back to ${data.rollback.previousVersionTag}`;
+        } else {
+          rollbackBtn.style.display = 'none';
+        }
+      } catch (err) {
+        box.innerHTML = `<div style="color: var(--status-danger);">Could not load update status: ${escapeHtml(err.message)}</div>`;
+        actionRow.style.display = 'flex';
+      }
+    }
+
+    async function checkForUpdates() {
+      const status = document.getElementById('updateActionStatus');
+      status.textContent = 'Checking GitHub for the latest release…';
+      try {
+        await refreshUpdateStatus({ force: true });
+        status.textContent = '';
+      } catch (err) {
+        status.textContent = 'Check failed: ' + err.message;
+      }
+    }
+
+    async function applyUpdate() {
+      const status = document.getElementById('updateActionStatus');
+      const applyBtn = document.getElementById('updateApplyBtn');
+
+      // Read the latest known tag from the visible button label —
+      // the button text was set by refreshUpdateStatus from server data.
+      // We re-fetch /status to get the exact current latestTag rather
+      // than parsing the button text, to be robust against UI drift.
+      let targetTag;
+      try {
+        const r = await fetch('/api/admin/updates/status', { credentials: 'include' });
+        const data = await r.json();
+        targetTag = data.latestVersion;
+      } catch {
+        status.textContent = 'Could not confirm latest version. Try refreshing.';
+        return;
+      }
+      if (!targetTag) {
+        status.textContent = 'No update is available right now.';
+        return;
+      }
+
+      const ok = await showConfirm(`Update ShowPilot to ${targetTag}?\n\nThis will restart the server. Active viewers will reconnect automatically.`);
+      if (!ok) return;
+
+      applyBtn.disabled = true;
+      status.textContent = 'Applying update — this may take 30–60 seconds. The server will restart when done.';
+
+      try {
+        const r = await fetch('/api/admin/updates/apply', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tag: targetTag }),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          // Pre-flight errors come back with a list to display.
+          if (data.preflightErrors && Array.isArray(data.preflightErrors)) {
+            status.innerHTML = 'Cannot update right now:<ul style="margin: 0.4rem 0 0 1.2rem;">'
+              + data.preflightErrors.map(e => '<li>' + escapeHtml(e) + '</li>').join('')
+              + '</ul>';
+          } else {
+            status.textContent = 'Update failed: ' + (data.error || ('HTTP ' + r.status));
+          }
+          applyBtn.disabled = false;
+          return;
+        }
+        status.textContent = `Update applied. The server is restarting on ${targetTag}. This page will reload in a moment…`;
+        // Wait a few seconds for the new process to come up, then reload.
+        // The server logs an "exiting for supervisor-managed restart"
+        // message ~1.5s after responding, then PM2 brings it back —
+        // typically ready in another 3-5s.
+        setTimeout(() => { location.reload(); }, 8000);
+      } catch (err) {
+        status.textContent = 'Update failed: ' + err.message;
+        applyBtn.disabled = false;
+      }
+    }
+
+    async function rollbackUpdate() {
+      const status = document.getElementById('updateActionStatus');
+      const rollbackBtn = document.getElementById('updateRollbackBtn');
+
+      const ok = await showConfirm(`Roll back to the previous version?\n\nYour data will be restored from the snapshot taken before the last update. The server will restart.`);
+      if (!ok) return;
+
+      rollbackBtn.disabled = true;
+      status.textContent = 'Rolling back — the server will restart when done.';
+
+      try {
+        const r = await fetch('/api/admin/updates/rollback', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          status.textContent = 'Rollback failed: ' + (data.error || ('HTTP ' + r.status));
+          rollbackBtn.disabled = false;
+          return;
+        }
+        status.textContent = data.message + ' This page will reload in a moment…';
+        setTimeout(() => { location.reload(); }, 8000);
+      } catch (err) {
+        status.textContent = 'Rollback failed: ' + err.message;
+        rollbackBtn.disabled = false;
+      }
+    }
+
+    // Tiny HTML escapers — local to this section; prevents the version
+    // strings or release URLs from injecting markup if anything weird
+    // ever comes back from GitHub.
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    function escapeAttr(s) {
+      return escapeHtml(s).replace(/"/g, '&quot;');
     }
 
     let pendingBackup = null;  // parsed JSON of the chosen file
@@ -5037,6 +5266,14 @@
       // Per-sub-tab data refresh hooks. Same pattern as switchMainTab —
       // refresh-on-open keeps the UI fresh without polling when not visible.
       if (name === 'public-access') loadCloudflaredStatus();
+      if (name === 'updates') {
+        // First open: hit /status (uses cached check). Subsequent opens
+        // also hit /status — the server's check cache is 1h, so we're
+        // not hammering GitHub. The "Check for updates" button does a
+        // forced check.
+        refreshUpdateStatus({ force: false });
+        updatesLoadedOnce = true;
+      }
     }
 
     async function saveSetting(key, value) {
