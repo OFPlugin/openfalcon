@@ -939,18 +939,20 @@
   // siblings (.voting_table grid-template-columns, etc.).
 
   // Stable signature of the desired grid contents — name, display_name,
-  // artist, image_url, and vote count. Order matters (admin-controlled
-  // ordering is meaningful). Mode is included so a JUKEBOX→VOTING flip
-  // forces a rebuild even if sequences are identical.
-  function computeGridSignature(sequences, voteCountsByName, mode) {
+  // artist, and image_url. Order matters (admin-controlled ordering is
+  // meaningful). Mode is included so a JUKEBOX→VOTING flip forces a
+  // rebuild. Vote counts are intentionally excluded: they're managed by
+  // the direct DOM update in applyStateUpdate and don't need a full
+  // innerHTML rebuild on every vote change.
+  function computeGridSignature(sequences, mode) {
     const parts = [mode];
     for (const s of sequences) {
       parts.push(
         s.name + '|' +
         (s.display_name || '') + '|' +
         (s.artist || '') + '|' +
-        (s.image_url || '') + '|' +
-        (voteCountsByName[s.name] || 0)
+        (s.image_url || '')
+        // vote counts excluded — managed by the direct DOM update in applyStateUpdate
       );
     }
     return parts.join('\n');
@@ -1011,7 +1013,7 @@
 
     const voteCountsByName = {};
     (data.voteCounts || []).forEach(v => { voteCountsByName[v.sequence_name] = v.count; });
-    const desiredSig = computeGridSignature(sequences, voteCountsByName, mode);
+    const desiredSig = computeGridSignature(sequences, mode);
 
     const wrappers = findPlaylistWrappers();
     if (wrappers.length === 0) return; // Empty-initial-load edge case.
