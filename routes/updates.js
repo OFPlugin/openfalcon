@@ -97,7 +97,7 @@ router.post('/apply', async (req, res) => {
     });
   }
 
-  const { tag } = req.body || {};
+  const { tag, force } = req.body || {};
   if (!tag || typeof tag !== 'string') {
     return res.status(400).json({ error: 'tag is required' });
   }
@@ -115,7 +115,7 @@ router.post('/apply', async (req, res) => {
   }
 
   try {
-    const result = await updater.applyUpdate(tag);
+    const result = await updater.applyUpdate(tag, { force: force === true });
     res.json({
       ok: true,
       message: 'Update applied. Restarting now…',
