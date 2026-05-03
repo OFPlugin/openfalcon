@@ -1824,7 +1824,7 @@
           <rect class="lp" x="8"   y="-3"  width="5" height="5" rx="1"/>
         </svg>
         <span class="app-brand-text">ShowPilot</span>
-        <span class="app-version">v0.33.13</span>
+        <span class="app-version">v0.33.17</span>
       </span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
@@ -3481,12 +3481,35 @@
     function copyShowToken() {
       const t = document.getElementById('showToken').textContent;
       if (!t || t === '—') return;
-      navigator.clipboard.writeText(t).then(() => {
-        const s = document.getElementById('copyTokenStatus');
+      const s = document.getElementById('copyTokenStatus');
+      function onSuccess() {
         s.textContent = '✓ Copied to clipboard';
         s.style.color = 'var(--status-success)';
         setTimeout(() => { s.textContent = ''; }, 2000);
-      });
+      }
+      function onFail() {
+        // Fallback for HTTP (non-localhost) or when clipboard permission is denied
+        try {
+          const el = document.createElement('textarea');
+          el.value = t;
+          el.style.position = 'fixed';
+          el.style.opacity = '0';
+          document.body.appendChild(el);
+          el.select();
+          document.execCommand('copy');
+          document.body.removeChild(el);
+          onSuccess();
+        } catch (e) {
+          s.textContent = 'Copy failed — select the token manually';
+          s.style.color = 'var(--status-error)';
+          setTimeout(() => { s.textContent = ''; }, 3000);
+        }
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(t).then(onSuccess).catch(onFail);
+      } else {
+        onFail();
+      }
     }
 
     // ============================================================
