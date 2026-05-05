@@ -67,9 +67,36 @@ app.use((req, res, next) => {
   next();
 });
 
+// cookieParser must be installed BEFORE the backup router below, because
+// requireAdmin needs req.cookies to verify the session JWT. We don't need
+// cookieParser before plugin/viewer routes, but installing it once at
+// the top is simpler than re-applying per-route.
+app.use(cookieParser());
+
+// Backup & restore API (v0.25.0+) — mounted BEFORE the global
+// express.json() parser below, because backup files (with cover art)
+// can run 5-50 MB and the default 1MB limit would reject them with an
+// HTML 413 response. The backup router declares its own parser with a
+// 100MB limit on its endpoints. Mounting here means we hit that parser
+// first; the global parser never sees these requests.
+//
+// Why isn't the global limit just bigger? Because everywhere else in
+// the app a 1MB request is comfortably above any legitimate use, and
+// keeping that ceiling is a useful defense against accidental or
+// adversarial blob uploads.
+const backupRouter = require('./routes/backup');
+const adminRouter = require('./routes/admin');
+app.use('/api/admin/backup', adminRouter.requireAdmin, backupRouter);
+const express2 = require('express');
+app.get('/api/setup/first-boot-status', backupRouter.firstBootStatusHandler);
+app.post(
+  '/api/setup/restore-from-backup',
+  express2.json({ limit: '100mb' }),
+  backupRouter.restoreFirstBootHandler
+);
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
 
 // Simple request logging
 app.use((req, res, next) => {
@@ -86,20 +113,261 @@ app.use((req, res, next) => {
 // Routes
 // ============================================================
 
+// Public unauthenticated endpoints (v0.31.0+) — currently just demo-status.
+// Lives outside /api/plugin and /api/admin because it has neither bearer-token
+// nor cookie auth. Read-only by design.
+app.use('/api/public', require('./routes/public'));
+
 // FPP plugin endpoints — mounted at /api/plugin for the ShowPilot plugin
 app.use('/api/plugin', require('./routes/plugin'));
 
-// Admin API (mount BEFORE /api/viewer to avoid prefix collisions)
-app.use('/api/admin', require('./routes/admin'));
+// Admin API (mount BEFORE /api/viewer to avoid prefix collisions).
+// The backup router was already mounted above the global json parser —
+// see the comment up there for why the order matters.
+app.use('/api/admin', adminRouter);
+
+// Cloudflare Tunnel admin endpoints (v0.29.0+). Mounted as a sibling of
+// /api/admin/backup. Auth applied at the mount point, same pattern as
+// backup. See lib/cloudflared.js for the supervisor design — this is a
+// child-process implementation rather than the systemd one used by
+// ShowPilot-Lite, because main has to work in Docker too.
+app.use('/api/admin/cloudflared', adminRouter.requireAdmin, require('./routes/cloudflared'));
+
+// In-app updater endpoints (v0.33.0+). Same sibling pattern as backup
+// and cloudflared. The router itself handles the Docker/demoMode
+// gating internally — it returns 503 with an explanation rather than
+// being absent, so the UI can render an informative state.
+app.use('/api/admin/updates', adminRouter.requireAdmin, require('./routes/updates'));
+
+// Start background polling for new releases. Best-effort; if it
+// errors we just don't update the cached "latest" until the next
+// successful poll. Skipped when the updater is unavailable
+// (Docker, demoMode) — we still want the UI to show "you're on
+// vX.Y.Z" but no need to hit GitHub from those deployments.
+const updater = require('./lib/updater');
+if (updater.isUpdaterAvailable()) {
+  updater.startBackgroundPolling();
+}
 
 // Public viewer API
 app.use('/api', require('./routes/viewer'));
+
+// ============================================================
+// PWA install support (v0.23.0+)
+// ============================================================
+// Browsers look for /manifest.json (or one referenced via
+// <link rel="manifest">) and /sw.js (service worker) at predictable
+// paths. We expose: /admin-manifest.json, /viewer-manifest.json,
+// /admin-icon, /viewer-icon, /sw.js. The HTML pages reference
+// whichever manifest applies.
+//
+// All routes are gated by per-show config so installs only become
+// available when the admin opts in. Admin uses fixed branding;
+// viewer is configurable.
+//
+// IMPORTANT for installability: Android and iOS browsers will
+// degrade to "shortcut to webpage" (instead of real PWA install)
+// if any of these fail:
+//   1. Service worker missing or has no real fetch handler
+//   2. Icons can't be fetched as real images (data: URLs are
+//      inconsistent across mobile browsers)
+//   3. Manifest doesn't have a 192px AND 512px icon entry
+// We address all three: SW responds to fetch for start_url, icons
+// served as real URLs (not data: URLs even though we STORE them
+// as base64 in the DB), and we declare multiple icon sizes even
+// though the source image is the same — Android's installability
+// check looks for these specific sizes.
+
+// Service worker — minimal but with a real fetch handler. Mobile
+// Chrome's installability check requires the SW to actually handle
+// fetches for the start_url; an empty handler doesn't qualify.
+// We just pass through every request (network-first, no caching),
+// which satisfies the criteria without changing actual network behavior.
+const PWA_SERVICE_WORKER = `
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+});
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+self.addEventListener('fetch', (event) => {
+  // Real fetch handler — responds with the network result. Without
+  // this responding to the start_url, Android Chrome won't consider
+  // the page installable and "Add to Home Screen" produces a shortcut
+  // bookmark instead of a true PWA install.
+  event.respondWith(fetch(event.request).catch(() => {
+    return new Response('Network error', { status: 503 });
+  }));
+});
+`;
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  // Service-Worker-Allowed lets us register an /sw.js with broader
+  // scope (root). Without this, /sw.js could only control /sw-scoped
+  // requests. We want it to claim the whole origin.
+  res.setHeader('Service-Worker-Allowed', '/');
+  res.send(PWA_SERVICE_WORKER);
+});
+
+// Helper: decode a stored data: URL back into raw image bytes plus
+// content type. Returns null if no icon configured. The DB stores
+// icons as data: URLs because that's the simplest upload path
+// (single column, no separate file storage), but we serve them as
+// real URLs because mobile browsers want fetchable image responses
+// for installability.
+function decodeStoredIcon(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== 'string') return null;
+  const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!m) return null;
+  try {
+    return { mime: m[1], buffer: Buffer.from(m[2], 'base64') };
+  } catch {
+    return null;
+  }
+}
+
+// Serve the configured viewer icon as a real image URL. Mobile
+// browsers that wouldn't accept data: URLs in manifest icons see
+// this as a normal image response and accept it.
+//
+// When the user has uploaded an icon (stored as data: URL in DB),
+// we decode and serve the bytes with the correct Content-Type.
+// When no icon is configured, fall back to the bundled SVG monogram —
+// served directly as image/svg+xml rather than redirecting to a
+// favicon.ico that may or may not exist. SVG is a valid format for
+// PWA manifest icons in modern browsers (Chrome 87+, Safari 17+).
+// PWA fallback icon — bundled SVG monogram, loaded once at startup.
+// Read from disk synchronously here (only happens at module load) so
+// the route handler doesn't pay per-request file I/O. Buffer is held
+// in memory; tiny (under 1KB).
+const fs = require('fs');
+const FALLBACK_ICON_SVG = (() => {
+  try {
+    return fs.readFileSync(path.join(__dirname, 'public/favicons/favicon-monogram.svg'));
+  } catch {
+    // If the file ever goes missing, return a tiny inline SVG so the
+    // route doesn't break. Better to serve a generic icon than 404.
+    // This is the simplified ShowPilot mark — same shape as the favicon
+    // file, so the fallback looks identical to the normal path.
+    return Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><g transform="translate(16 16) scale(0.30)"><rect x="-5" y="-46" width="10" height="10" rx="2" fill="#F4B942"/><rect x="36" y="-5" width="10" height="10" rx="2" fill="#F4B942"/><rect x="-5" y="36" width="10" height="10" rx="2" fill="#F4B942"/><rect x="-46" y="-5" width="10" height="10" rx="2" fill="#F4B942"/><rect x="22" y="-32" width="8" height="8" rx="2" fill="#E94B7B"/><rect x="-30" y="-32" width="8" height="8" rx="2" fill="#E94B7B"/><rect x="22" y="24" width="8" height="8" rx="2" fill="#E94B7B"/><rect x="-30" y="24" width="8" height="8" rx="2" fill="#E94B7B"/><polygon points="-14,-18 -14,18 18,0" fill="#F4B942"/></g></svg>');
+  }
+})();
+
+app.get('/viewer-icon', (req, res) => {
+  const { getConfig } = require('./lib/db');
+  const cfg = getConfig();
+  const decoded = decodeStoredIcon(cfg.pwa_viewer_icon);
+  if (!decoded) {
+    // Serve the bundled SVG fallback directly. No redirect chain —
+    // Android's installability check is fussy about icon fetches and
+    // a redirect can sometimes confuse it.
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.send(FALLBACK_ICON_SVG);
+  }
+  res.setHeader('Content-Type', decoded.mime || 'image/png');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.send(decoded.buffer);
+});
+
+// Admin icon route — admin uses the bundled monogram SVG. Direct
+// serving avoids the redirect-to-favicon.ico chain that was failing
+// in v0.23.1 when no favicon.ico existed in the public root.
+app.get('/admin-icon', (req, res) => {
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.send(FALLBACK_ICON_SVG);
+});
+
+app.get('/admin-manifest.json', (req, res) => {
+  const { getConfig } = require('./lib/db');
+  const cfg = getConfig();
+  if (cfg.pwa_admin_enabled !== 1) {
+    return res.status(404).send('Admin PWA install not enabled');
+  }
+  res.setHeader('Content-Type', 'application/manifest+json');
+  res.setHeader('Cache-Control', 'no-cache');
+  // Three icon entries: 192, 512, and any. Android Chrome's
+  // installability check specifically looks for a 192x192 AND
+  // a 512x512 icon. We declare both sizes pointing at the same
+  // SVG (which scales perfectly) — browser uses the SVG for any
+  // requested size, scaled losslessly. Type must be image/svg+xml
+  // because the route serves SVG bytes; mismatched type causes
+  // Android to reject the icon and fail installability.
+  res.json({
+    // The 'id' field is what browsers use to uniquely identify a PWA
+    // for install purposes. Without distinct IDs, two manifests on
+    // the same origin clash — the browser treats them as the same app
+    // and refuses to install one if the other is already installed.
+    // ParkHopper and similar multi-app sites work because each app
+    // declares its own ID. The ID can be any string; convention is
+    // a path-like value.
+    id: '/admin',
+    name: 'ShowPilot Admin',
+    short_name: 'ShowPilot',
+    start_url: '/admin/',
+    scope: '/admin/',
+    display: 'standalone',
+    background_color: '#0a0a0a',
+    theme_color: '#0a0a0a',
+    icons: [
+      { src: '/admin-icon', sizes: '192x192', type: 'image/svg+xml', purpose: 'any' },
+      { src: '/admin-icon', sizes: '512x512', type: 'image/svg+xml', purpose: 'any' },
+      { src: '/admin-icon', sizes: '192x192', type: 'image/svg+xml', purpose: 'maskable' },
+      { src: '/admin-icon', sizes: '512x512', type: 'image/svg+xml', purpose: 'maskable' },
+    ],
+  });
+});
+
+app.get('/viewer-manifest.json', (req, res) => {
+  const { getConfig } = require('./lib/db');
+  const cfg = getConfig();
+  if (cfg.pwa_viewer_enabled !== 1) {
+    return res.status(404).send('Viewer PWA install not enabled');
+  }
+  const name = (cfg.pwa_viewer_name && cfg.pwa_viewer_name.trim())
+    || cfg.show_name
+    || 'Light Show';
+  res.setHeader('Content-Type', 'application/manifest+json');
+  res.setHeader('Cache-Control', 'no-cache');
+  // Icon type must match what /viewer-icon actually serves.
+  // - User uploaded an icon (data: URL): we extract the MIME from
+  //   the data URL prefix; usually image/png, sometimes image/jpeg.
+  // - No upload: we serve the SVG fallback as image/svg+xml.
+  // Mismatch between manifest 'type' and actual Content-Type causes
+  // Android Chrome to reject the icon and fail installability.
+  let iconType = 'image/svg+xml';
+  if (cfg.pwa_viewer_icon && cfg.pwa_viewer_icon.startsWith('data:')) {
+    const m = cfg.pwa_viewer_icon.match(/^data:([^;]+);/);
+    if (m) iconType = m[1];
+  }
+  res.json({
+    // See admin manifest for the rationale on the 'id' field — it's
+    // what lets the browser distinguish admin and viewer as separate
+    // installable apps even though they share an origin.
+    id: '/viewer',
+    name,
+    short_name: name.length > 12 ? name.slice(0, 12) : name,
+    start_url: '/',
+    scope: '/',
+    display: 'standalone',
+    background_color: '#000000',
+    theme_color: '#000000',
+    icons: [
+      { src: '/viewer-icon', sizes: '192x192', type: iconType, purpose: 'any' },
+      { src: '/viewer-icon', sizes: '512x512', type: iconType, purpose: 'any' },
+      { src: '/viewer-icon', sizes: '192x192', type: iconType, purpose: 'maskable' },
+      { src: '/viewer-icon', sizes: '512x512', type: iconType, purpose: 'maskable' },
+    ],
+  });
+});
 
 // Viewer page at root — renders the active template through the RF-compatible renderer.
 app.get('/', (req, res) => {
   try {
     const { renderTemplate, getActiveTemplate } = require('./lib/viewer-renderer');
-    const { db, getConfig, getNowPlaying } = require('./lib/db');
+    const { db, getConfig, getNowPlaying, getNextUp } = require('./lib/db');
     const { logVisit } = require('./lib/visit-tracking');
 
     // Log this visit for analytics (skips bots and preview-mode requests).
@@ -146,13 +414,54 @@ app.get('/', (req, res) => {
       WHERE played = 0 ORDER BY requested_at ASC
     `).all();
 
+    // Detect admin login so the viewer can render a small "Admin" pill
+    // that takes logged-in admins back to the admin dashboard. Failing
+    // verification (no cookie, expired, tampered) just leaves isAdmin
+    // false — the pill silently doesn't render. The check is cheap;
+    // we already require jwt for admin routes.
+    let isAdmin = false;
+    try {
+      const adminToken = req.cookies[config.sessionCookieName];
+      if (adminToken) {
+        const jwt = require('jsonwebtoken');
+        const payload = jwt.verify(adminToken, config.jwtSecret);
+        if (payload && payload.userId) {
+          const user = db.prepare('SELECT enabled FROM users WHERE id = ?').get(payload.userId);
+          if (user && user.enabled) isAdmin = true;
+        }
+      }
+    } catch {
+      // Invalid/expired token — leave isAdmin false. Don't clear the
+      // cookie here; that's the admin auth path's job.
+    }
+
+    // Now-playing timer (v0.32.9+) — same convention as /api/state. Look
+    // up the now-playing sequence's duration directly so PSAs / hidden /
+    // cooldown sequences also get a working timer. The renderer turns
+    // this into the m:ss text inside the <span data-showpilot-timer>;
+    // rf-compat takes over after page load.
+    let nowPlayingStartedAtIso = null;
+    let nowPlayingDurationSeconds = null;
+    if (nowPlaying.sequence_name && nowPlaying.started_at) {
+      nowPlayingStartedAtIso = nowPlaying.started_at.replace(' ', 'T') + 'Z';
+      const npRow = db.prepare(
+        `SELECT duration_seconds FROM sequences WHERE name = ? LIMIT 1`
+      ).get(nowPlaying.sequence_name);
+      if (npRow && npRow.duration_seconds) {
+        nowPlayingDurationSeconds = npRow.duration_seconds;
+      }
+    }
+
     const html = renderTemplate(tpl, {
       config: cfg,
       sequences: sequencesBusted,
       voteCounts,
       queue,
       nowPlaying: nowPlaying.sequence_name,
-      nextScheduled: nowPlaying.next_sequence_name,
+      nextScheduled: getNextUp(cfg, nowPlaying.sequence_name || null),
+      nowPlayingStartedAtIso,
+      nowPlayingDurationSeconds,
+      isAdmin,
     });
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -372,4 +681,45 @@ server.listen(config.port, config.host, () => {
   // Secret resolution + any "first run, generated for you" announcements
   // happen in lib/config-loader.js — by the time we get here, secrets are
   // already real values from one of: env > config.js > secrets.json > generated.
+
+  // Cloudflare Tunnel: if the operator has previously saved a token,
+  // spawn cloudflared as a child process so the tunnel comes back
+  // automatically after a restart. Done after listen() so any spawn
+  // logging goes to operator output, not interleaved with startup.
+  try {
+    require('./lib/cloudflared').autoStartIfConfigured();
+  } catch (err) {
+    console.error('[cloudflared] auto-start failed:', err.message);
+  }
+});
+
+// Clean shutdown: tell the cloudflared supervisor to stop respawning
+// and kill its child process before we exit. We hook SIGTERM/SIGINT
+// because adding a listener overrides Node's default exit behavior,
+// so we have to explicitly exit ourselves.
+//
+// PM2 reload sends SIGINT; systemd stop sends SIGTERM. Both flow
+// through here. The exit hook is a belt-and-suspenders for unexpected
+// process.exit() calls elsewhere (e.g. backup-restore's clean-exit
+// path) — synchronous-only, can't await.
+//
+// If we don't clean up, a SIGKILL'd cloudflared child gets reparented
+// to init and keeps running — an orphaned tunnel pointing at nothing.
+function gracefulExit(signal, code) {
+  try {
+    require('./lib/cloudflared').shutdownHook();
+  } catch {}
+  // Give the SIGTERM we just sent to cloudflared a moment to land,
+  // then exit. A 500ms wait isn't perfect but it's almost always enough
+  // for a child process to receive the signal and start exiting.
+  setTimeout(() => process.exit(code), 500).unref();
+}
+process.on('SIGTERM', () => gracefulExit('SIGTERM', 0));
+process.on('SIGINT',  () => gracefulExit('SIGINT',  0));
+// Synchronous-only on 'exit' — can't delay or do anything async here.
+// shutdownHook is async-shaped but its only effect (kill -TERM) is sync.
+process.on('exit', () => {
+  try {
+    require('./lib/cloudflared').shutdownHook();
+  } catch {}
 });

@@ -4,23 +4,28 @@
 # Builds a multi-arch (amd64 + arm64) Docker image and publishes it to
 # GitHub Container Registry (ghcr.io) on two triggers:
 #
-#   1. STABLE RELEASE — push a version tag like v0.18.5
-#         git tag v0.18.5 && git push --tags
-#      Produces these image tags on GHCR:
-#         - ghcr.io/showpilotfpp/showpilot:0.18.5
-#         - ghcr.io/showpilotfpp/showpilot:0.18
-#         - ghcr.io/showpilotfpp/showpilot:latest
-#      Users on `:latest` get the new version on next `docker compose pull`.
+# 1. STABLE RELEASE — push a version tag like v0.18.5
+#    git tag v0.18.5 && git push --tags
+#    Produces these image tags on GHCR:
+#      - ghcr.io/showpilotfpp/showpilot:0.18.5
+#      - ghcr.io/showpilotfpp/showpilot:0.18
+#      - ghcr.io/showpilotfpp/showpilot:latest
+#    Users on `:latest` get the new version on next `docker compose pull`.
 #
-#   2. BETA — push to the beta branch
-#         git checkout beta && git push
-#      Produces:
-#         - ghcr.io/showpilotfpp/showpilot:beta
-#      Users on `:beta` get the new beta on next `docker compose pull`.
-#      `:latest` is NOT updated — production users keep their stable build.
+# 2. BETA — push to the beta branch
+#    git checkout beta && git push
+#    Produces:
+#      - ghcr.io/showpilotfpp/showpilot:beta
+#    Users on `:beta` get the new beta on next `docker compose pull`.
+#    `:latest` is NOT updated — production users keep their stable build.
 #
 # The two channels are independent. Beta users opt in by pulling `:beta`;
 # everyone else stays on `:latest` and never sees beta builds.
+#
+# NOTE on `:latest`: uses startsWith(github.ref, 'refs/tags/') rather than
+# is_default_branch because tag-triggered runs have ref=refs/tags/vX.Y.Z —
+# is_default_branch evaluates false on tag triggers, which was silently
+# preventing :latest from being published on every release.
 # ============================================================
 
 name: Build and publish Docker image
@@ -81,7 +86,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
             type=ref,event=branch,enable=${{ github.ref == 'refs/heads/beta' }}
 
       - name: Build and push multi-arch image

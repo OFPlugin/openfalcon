@@ -46,7 +46,11 @@ const loginLimiter = rateLimit({
 const REMEMBER_ME_DAYS = 30;
 
 function requireAdmin(req, res, next) {
-  const token = req.cookies[config.sessionCookieName];
+  // Defensive: req.cookies is undefined if cookieParser hasn't run.
+  // That's a server misconfiguration (see comment on cookieParser
+  // ordering in server.js), but treat it as "not authed" so we
+  // return a clean 401 JSON instead of an unhandled-error HTML page.
+  const token = req.cookies && req.cookies[config.sessionCookieName];
   if (!token) return res.status(401).json({ error: 'Not logged in' });
   try {
     const payload = jwt.verify(token, config.jwtSecret);
@@ -130,7 +134,34 @@ router.get('/me', requireAdmin, (req, res) => {
     userId: req.user.id,
     rememberMe: !!req.user.remember_me,
     mustChangePassword: !!req.user.must_change_password,
+    theme: req.user.theme || null,
   });
+});
+
+// Per-user theme preference. Stored on the user so the choice follows them
+// across devices. The list here MUST stay in sync with ALL_THEMES in
+// public/admin/index.html — additions go in both places. We validate
+// against the allowlist rather than accepting any string both for DB
+// hygiene and because the value is dropped into a CSS class on the body
+// (`theme-${value}`), so an unbounded string would be a soft injection
+// risk if rendering ever changes.
+const ALLOWED_THEMES = new Set([
+  'stage-dark', 'stage-light',
+  'christmas', 'halloween', 'easter',
+  'stpatricks', 'independence', 'valentines',
+]);
+router.put('/me/theme', requireAdmin, (req, res) => {
+  const { theme } = req.body || {};
+  // null/empty clears the preference (falls back to default on next login)
+  if (theme === null || theme === '' || theme === undefined) {
+    require('../lib/db').setUserTheme(req.user.id, null);
+    return res.json({ ok: true, theme: null });
+  }
+  if (typeof theme !== 'string' || !ALLOWED_THEMES.has(theme)) {
+    return res.status(400).json({ error: 'Invalid theme' });
+  }
+  require('../lib/db').setUserTheme(req.user.id, theme);
+  res.json({ ok: true, theme });
 });
 
 // ============================================================
@@ -156,35 +187,70 @@ router.put('/config', requireAdmin, (req, res) => {
     'jukebox_sequence_request_limit',
     'prevent_multiple_requests',
     'viewer_request_limit',
+    'block_request_currently_playing',
+    'block_request_next_up',
     // Voting safeguards
     'prevent_multiple_votes',
+    'allow_vote_change',
     'reset_votes_after_round',
+    'tiebreak_enabled',
+    'tiebreak_duration_sec',
+    'block_vote_currently_playing',
+    'block_vote_next_up',
+    // tiebreak_active, tiebreak_started_at, tiebreak_deadline_at,
+    // tiebreak_candidates are server-managed runtime state, not admin
+    // settings — explicitly NOT whitelisted here so they can't be
+    // overwritten via the settings save endpoint.
     // PSA
     'play_psa_enabled',
     'psa_frequency',
+    'psa_trigger_mode',  // 'interactions' | 'sequences' (v0.30.0+)
     // Viewer presence
     'check_viewer_present',
     'viewer_present_mode',
     'show_latitude',
     'show_longitude',
     'check_radius_miles',
+    // Location code (v0.33.24+)
+    'location_code_enabled',
+    'location_code',
     // Misc
     'hide_sequence_after_played',
     'blocked_ips',
     // Viewer player decoration
     'player_decoration',
     'player_decoration_animated',
-    'page_snow_enabled',
+    'page_snow_enabled',           // legacy; kept whitelisted so older admin tabs / backups still round-trip
+    'page_effect',                 // 'none' | 'snow' | 'leaves' | 'fireworks' | 'hearts' | 'stars' | 'bats' | 'confetti' | 'petals' | 'embers' | 'bubbles' | 'rain'
+    'page_effect_color',           // CSS color or empty string for "use default for this effect"
+    'page_effect_intensity',       // 'subtle' | 'medium' | 'heavy'
     'player_custom_color',
     // External access
     'public_base_url',
+    'audio_enabled',
     'audio_gate_enabled',
     'audio_gate_radius_miles',
+    'audio_sync_offset_ms',
     'viewer_source_obfuscate',
+    'pwa_admin_enabled',
+    'pwa_viewer_enabled',
+    'pwa_viewer_name',
+    'pwa_viewer_icon',
+    // Listen-on-phone launcher button
+    'launcher_icon_source',
+    'launcher_icon_data',
+    'launcher_show_chrome',
+    'launcher_size',
   ];
   const updates = {};
   for (const k of allowed) {
     if (k in req.body) updates[k] = req.body[k];
+  }
+
+  // Sanitize psa_trigger_mode (v0.30.0+) to one of two allowed values.
+  // Anything else falls back to 'interactions' (the default + safe option).
+  if ('psa_trigger_mode' in updates && updates.psa_trigger_mode !== 'sequences') {
+    updates.psa_trigger_mode = 'interactions';
   }
 
   // When admin sets viewer_control_mode to something other than OFF, remember it
@@ -202,6 +268,16 @@ router.put('/config', requireAdmin, (req, res) => {
   }
 
   updateConfig(updates);
+
+  // If the admin actually changed viewer_control_mode (not just other
+  // settings), emit the same event the plugin's mode-toggle endpoint
+  // emits — so connected viewers refresh immediately instead of waiting
+  // up to 3s for the polling fallback. Mirrors routes/plugin.js.
+  if ('viewer_control_mode' in updates) {
+    const io = req.app.get('io');
+    if (io) io.emit('viewerModeChanged', { mode: updates.viewer_control_mode });
+  }
+
   res.json({ ok: true });
 });
 
@@ -369,7 +445,7 @@ function updateSequence(req, res) {
   const id = Number(req.params.id);
   const fields = ['display_name', 'artist', 'category', 'image_url',
                   'duration_seconds', 'visible', 'votable', 'jukeboxable',
-                  'is_psa', 'display_order'];
+                  'is_psa', 'display_order', 'cooldown_minutes'];
   const updates = {};
   for (const k of fields) {
     if (k in req.body) updates[k] = req.body[k];
@@ -1613,3 +1689,8 @@ router.get('/geocode', requireAdmin, async (req, res) => {
 });
 
 module.exports = router;
+// Expose the auth middleware so other route modules (e.g. backup) can
+// reuse it without duplicating jwt-verify boilerplate. Backup needs
+// admin auth on its in-app endpoints; the first-boot endpoints are
+// gated separately via lib/backup.isFirstBoot().
+module.exports.requireAdmin = requireAdmin;

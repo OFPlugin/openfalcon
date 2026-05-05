@@ -13,35 +13,200 @@
   const boot = window.__SHOWPILOT__ || {};
   let cachedLocation = null;
   let hasVoted = false;
+  // Vote shifting (v0.32.6+): when allowVoteChange is true, a user who has
+  // already voted can click another song to switch. Track which song they
+  // last voted for so we can no-op a click on the same one and show
+  // friendlier feedback ("Vote changed" vs. "Vote cast").
+  // allowVoteChange is read from boot first and refreshed on every /api/state.
+  let votedFor = null;
+  let allowVoteChange = !!boot.allowVoteChange;
+  // Last-known voting round id, refreshed on every /api/state response.
+  // When this changes (server advanced past our vote), we clear hasVoted
+  // so the user can vote in the new round. Backup mechanism for
+  // voteReset socket events that may be missed on mobile when the
+  // socket dies during backgrounding.
+  let lastKnownRoundId = null;
+  // Show name as last seen from the server. When this changes, we update
+  // document.title — but only if the title currently matches what we last
+  // saw, so a template that hard-coded its own <title> isn't stomped on.
+  let lastKnownShowName = null;
+  // Tiebreak state — separate from main-round vote tracking. A user who
+  // voted in the main round can still cast a tiebreak vote; this flag
+  // tracks the latter independently.
+  let hasTiebreakVoted = false;
+  // Active tiebreak metadata. Populated by socket event 'tiebreakStarted'
+  // OR by /api/state when reconnecting mid-tiebreak (page reload during
+  // a tiebreak window). Null when no tiebreak is in progress.
+  let tiebreakState = null; // { candidates: [{sequenceName,...}], deadline_ms }
+  let tiebreakCountdownTimer = null;
+
+  // Now-playing timer (v0.32.9+).
+  // RF compatibility: implements the {NOW_PLAYING_TIMER} placeholder
+  // (countdown of remaining time in the current sequence). The renderer
+  // emits <span data-showpilot-timer> elements with initial server-computed
+  // text; this code ticks them client-side once a second. State is the
+  // server-anchored start time + duration. When either is missing, the
+  // ticker writes --:--; once remaining hits zero, it writes 0:00 and
+  // stops updating until /api/state reports a new song.
+  //
+  // We deliberately do NOT use the audio engine's clock-sync (clockOffset)
+  // here. The timer ticks at second granularity; sub-second sync isn't
+  // visible. Avoiding the dependency keeps this code module-isolated and
+  // works even when audio is disabled.
+  let timerStartedAtMs = null;     // ms epoch when the song started (server's clock)
+  let timerDurationSec = null;     // seconds, total length
+  let timerInterval = null;        // setInterval handle
 
   // ======= Error/success message helpers =======
   // RF templates include divs with these IDs; we show the appropriate one.
+  // Vote-specific success goes to #voteSuccessful when present (so templates
+  // can word it differently from the jukebox "Successfully Added"); falls
+  // back to #requestSuccessful for templates that don't define a separate
+  // vote message. This keeps backward compatibility with all imported RF
+  // templates while letting newer templates differentiate the two flows.
   const MSG_IDS = {
     success: 'requestSuccessful',
+    voteSuccess: 'voteSuccessful',
     invalidLocation: 'invalidLocation',
+    invalidLocationCode: 'invalidLocationCode',
     failed: 'requestFailed',
     alreadyQueued: 'requestPlaying',
     queueFull: 'queueFull',
     alreadyVoted: 'alreadyVoted',
+    songPlaying: 'songPlaying',
+    songNextUp:  'songNextUp',
   };
 
-  function showMessage(id, durationMs) {
-    const el = document.getElementById(id);
+  function showMessage(id, durationMs, textOverride, fallbackText) {
+    let el = document.getElementById(id);
+    let usedFallback = false;
+    // Fallback: if a vote-specific success isn't defined in this template,
+    // use the generic success element. Some templates only have one.
+    if (!el && id === MSG_IDS.voteSuccess) {
+      el = document.getElementById(MSG_IDS.success);
+      usedFallback = true;
+    }
+    // Fallback: if a specific error element isn't in this template (e.g. code-mode
+    // or imported RF templates that predate these IDs), show #requestFailed with
+    // the actual server error text so the user gets a meaningful message.
+    if (!el && fallbackText) {
+      el = document.getElementById(MSG_IDS.failed);
+      if (el) textOverride = fallbackText;
+    }
     if (!el) {
-      console.warn('ShowPilot compat: no element with id', id);
+      console.warn('[ShowPilot] no element with id', id, '— message could not be displayed');
       return;
     }
+    // If we fell back from voteSuccess to requestSuccess, override the
+    // text so the user doesn't see jukebox wording ("Successfully Added")
+    // for a vote action. We stash the original HTML the first time we
+    // override so the element returns to its original wording for
+    // subsequent jukebox successes (templates may use the same element
+    // for both, just changing wording per-action).
+    //
+    // Templates with their own #voteSuccessful div get whatever wording
+    // they put inside it; this only kicks in for templates that don't
+    // define one. textOverride lets callers pass custom wording too.
+    const desiredText = textOverride || (
+      (id === MSG_IDS.voteSuccess || (usedFallback && id === MSG_IDS.voteSuccess))
+        ? 'You\'ve Successfully Voted! 🗳️'
+        : null
+    );
+    if (desiredText) {
+      if (!el.__showpilotOriginalHtml) {
+        el.__showpilotOriginalHtml = el.innerHTML;
+      }
+      el.textContent = desiredText;
+    } else if (el.__showpilotOriginalHtml) {
+      // Restore original wording for non-vote uses of the same element
+      el.innerHTML = el.__showpilotOriginalHtml;
+    }
     el.style.display = 'block';
-    setTimeout(() => { el.style.display = 'none'; }, durationMs || 3000);
+    // Tap-to-dismiss: most templates style these as floating overlays
+    // with cursor: pointer, but no actual click handler. Add one so
+    // users who tap the message can dismiss it immediately rather than
+    // wait for the timeout. Idempotent — set once per element.
+    if (!el.__showpilotDismissBound) {
+      el.addEventListener('click', () => { el.style.display = 'none'; });
+      el.__showpilotDismissBound = true;
+    }
+    if (el.__showpilotHideTimer) clearTimeout(el.__showpilotHideTimer);
+    el.__showpilotHideTimer = setTimeout(() => {
+      el.style.display = 'none';
+    }, durationMs || 3000);
   }
 
-  function mapErrorToId(error) {
+  function mapErrorToId(error, data) {
+    // Server explicitly flags code failures (v0.33.24+) — use the dedicated toast.
+    if (data && data.invalidLocationCode) return MSG_IDS.invalidLocationCode;
     const msg = (error || '').toLowerCase();
+    if (msg.includes('access code')) return MSG_IDS.invalidLocationCode;
     if (msg.includes('location')) return MSG_IDS.invalidLocation;
     if (msg.includes('already voted')) return MSG_IDS.alreadyVoted;
     if (msg.includes('already') && (msg.includes('request') || msg.includes('queue'))) return MSG_IDS.alreadyQueued;
     if (msg.includes('queue is full') || msg.includes('full')) return MSG_IDS.queueFull;
+    if (msg.includes('playing right now')) return MSG_IDS.songPlaying;
+    if (msg.includes('already up next')) return MSG_IDS.songNextUp;
     return MSG_IDS.failed;
+  }
+
+  // ======= Now-playing timer ({NOW_PLAYING_TIMER}) =======
+  // Format remaining seconds as m:ss. Negative/NaN → 0:00 (timer expired).
+  // null → --:-- (no song or duration unknown). Matches RF's display.
+  function formatTimerText(remainingSec) {
+    if (remainingSec === null || !isFinite(remainingSec)) return '--:--';
+    const sec = Math.max(0, Math.floor(remainingSec));
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  // Update every <span data-showpilot-timer> on the page with the current
+  // remaining-time text. Called from the 1-second interval AND once
+  // immediately on each /api/state poll (in case the song changed and the
+  // tick is up to a second away from firing). Idempotent.
+  function paintTimer() {
+    const els = document.querySelectorAll('[data-showpilot-timer]');
+    if (!els.length) return; // template doesn't include the placeholder; skip
+    let text;
+    if (timerStartedAtMs === null || timerDurationSec === null) {
+      text = '--:--';
+    } else {
+      const elapsedSec = (Date.now() - timerStartedAtMs) / 1000;
+      text = formatTimerText(timerDurationSec - elapsedSec);
+    }
+    els.forEach(el => { if (el.textContent !== text) el.textContent = text; });
+  }
+
+  // Update the anchor values from a /api/state response (or bootstrap).
+  // We accept ISO string + duration in seconds. When the song or its anchor
+  // changes, we replace state and immediately re-paint so the user doesn't
+  // see a stale value for up to a second. The 1-second interval is started
+  // on first call and lives for the page lifetime — cheap and ensures we
+  // don't miss updates if a /api/state poll is delayed.
+  function updateTimerFromState(startedAtIso, durationSeconds) {
+    const newStartMs = startedAtIso ? Date.parse(startedAtIso) : null;
+    const newDurSec = (typeof durationSeconds === 'number' && isFinite(durationSeconds) && durationSeconds > 0)
+      ? durationSeconds : null;
+    // Only re-paint when something actually changed — avoids a textContent
+    // write per /api/state poll for songs that haven't changed.
+    if (newStartMs !== timerStartedAtMs || newDurSec !== timerDurationSec) {
+      timerStartedAtMs = newStartMs && isFinite(newStartMs) ? newStartMs : null;
+      timerDurationSec = newDurSec;
+      paintTimer();
+    }
+    // Lazy-start the interval. Once running, it stays running for the
+    // page lifetime — there's no benefit to stopping it (it does nothing
+    // when there's no [data-showpilot-timer] on the page anyway).
+    if (timerInterval === null && document.querySelector('[data-showpilot-timer]')) {
+      timerInterval = setInterval(paintTimer, 1000);
+    }
+  }
+  // Seed from bootstrap so the timer is correct before the first poll.
+  // boot.nowPlayingStartedAtIso / nowPlayingDurationSeconds are set by
+  // viewer-renderer.js when a song is currently playing.
+  if (boot.nowPlayingStartedAtIso || boot.nowPlayingDurationSeconds) {
+    updateTimerFromState(boot.nowPlayingStartedAtIso, boot.nowPlayingDurationSeconds);
   }
 
   // ======= GPS =======
@@ -148,6 +313,13 @@
         throw e;
       }
     }
+    // Location code (v0.33.24+): read from #locationCodeInput if present.
+    // Always include when requiresLocationCode so the server can validate;
+    // silently omit on installs where the feature is off.
+    if (boot.requiresLocationCode) {
+      const codeEl = document.getElementById('locationCodeInput');
+      body.locationCode = codeEl ? codeEl.value.trim() : '';
+    }
     return body;
   }
 
@@ -166,9 +338,34 @@
 
   // Globals exposed to template onclick handlers
   window.ShowPilotVote = async function (sequenceName) {
+    // If a tiebreak is in progress, route through the tiebreak path
+    // instead. Voting for a candidate goes via /api/tiebreak-vote;
+    // voting for a non-candidate is rejected with a clear message.
+    if (tiebreakState) {
+      const candidateNames = tiebreakState.candidates.map(c => c.sequenceName);
+      if (candidateNames.includes(sequenceName)) {
+        return window.ShowPilotTiebreakVote(sequenceName);
+      } else {
+        // Non-candidate vote during tiebreak. Show a clear message.
+        // Falls back to alreadyVoted message id since most templates
+        // have it, with text users will recognize as "voting blocked."
+        showMessage(MSG_IDS.alreadyVoted);
+        return;
+      }
+    }
     if (hasVoted) {
-      showMessage(MSG_IDS.alreadyVoted);
-      return;
+      // Vote shifting: if the admin allows changing votes, let the click
+      // through so the server can swap. Otherwise the existing block.
+      if (!allowVoteChange) {
+        showMessage(MSG_IDS.alreadyVoted);
+        return;
+      }
+      // No-op: user clicked the same song they already voted for. Don't
+      // round-trip; just acknowledge silently. (We could show "still
+      // voted!" but that risks looking buggy.)
+      if (votedFor === sequenceName) {
+        return;
+      }
     }
     let body;
     try { body = await buildBody({ sequenceName }); }
@@ -177,9 +374,29 @@
     const result = await postJson('/api/vote', body);
     if (result.ok) {
       hasVoted = true;
-      showMessage(MSG_IDS.success);
+      votedFor = sequenceName;
+      // Vote-specific success message. showMessage falls back to the
+      // generic #requestSuccessful element if #voteSuccessful isn't
+      // defined in the active template (backward compat for RF imports).
+      // On a successful shift, override the text so users understand
+      // their vote moved rather than "you've already voted."
+      if (result.data && result.data.shifted) {
+        showMessage(MSG_IDS.voteSuccess, undefined, 'Vote changed! 🗳️');
+      } else {
+        showMessage(MSG_IDS.voteSuccess);
+      }
+      // (v0.32.11+) Refresh state immediately so the count cell updates
+      // the moment the server acks the vote, regardless of socket health.
+      // Without this, count updates rely entirely on the voteUpdate
+      // socket event reaching the browser — which is fast on a healthy
+      // connection but unreliable behind some proxies or when socket.io
+      // can't establish (mixed-content, blocked WebSockets, etc.). The
+      // 3-second poll loop catches it eventually but feels broken to a
+      // user clicking and watching a counter that doesn't move. Mirrors
+      // ShowPilotRequest's behavior, which has always done this.
+      refreshState();
     } else {
-      showMessage(mapErrorToId(result.data?.error));
+      showMessage(mapErrorToId(result.data?.error, result.data), undefined, undefined, result.data?.error);
     }
   };
 
@@ -193,7 +410,7 @@
       showMessage(MSG_IDS.success);
       refreshState();
     } else {
-      showMessage(mapErrorToId(result.data?.error));
+      showMessage(mapErrorToId(result.data?.error, result.data), undefined, undefined, result.data?.error);
     }
   };
 
@@ -226,19 +443,134 @@
   function applyStateUpdate(data) {
     // --- Vote counts ---
     if (data.voteCounts) {
+      // Two attributes carry the count per row: [data-seq-count] on the
+      // canonical-RF .cell-vote element, and [data-seq-votes] on the
+      // RF Page Builder .sequence-votes span. Templates may style either
+      // (or both), so live updates must hit both.
       // First clear all existing counts to 0 so a removed vote drops visibly
-      document.querySelectorAll('[data-seq-count]').forEach(el => {
+      const allCells = document.querySelectorAll('[data-seq-count], [data-seq-votes]');
+      allCells.forEach(el => {
         el.textContent = '0';
       });
+      // Build a name → cell map by reading the actual attribute values
+      // back from the DOM. This avoids the CSS attribute-selector pitfall
+      // where names with quotes, brackets, or other special chars don't
+      // match — getAttribute returns the un-escaped value, so a direct
+      // string compare always works regardless of how the attribute was
+      // serialized in the HTML.
+
+      // (array map, updates all matching elements). This is to fix a bug
+      // where votes for songs are rendered on the first instance of the
+      // voting div for a song only. There are 2 instances of those divs
+      // (one for jukebox mode, one for voting mode) and the counts only
+      // update on the first one. By building a map of all cells by name,
+      // we can update all of them correctly.
+      const cellsByName = {};
+      allCells.forEach(el => {
+          const n = el.getAttribute('data-seq-count') || el.getAttribute('data-seq-votes');
+          if (n) {
+              if (!cellsByName[n]) cellsByName[n] = [];
+              cellsByName[n].push(el);
+          }
+      });
       data.voteCounts.forEach(v => {
-        const el = document.querySelector(`[data-seq-count="${v.sequence_name}"]`);
-        if (el) el.textContent = v.count;
+          const els = cellsByName[v.sequence_name];
+          if (els) els.forEach(el => { el.textContent = String(v.count); });
       });
     }
 
-    // --- Reset "already voted" gate when a new round begins ---
+    // --- Reset "already voted" gate when the round id changes ---
+    // Round-id check is the backup for voteReset socket events which
+    // mobile devices can miss when backgrounded. If the server has
+    // moved past our recorded round, our local "already voted" flag
+    // is stale and must clear.
+    // --- Allow-vote-change feature flag (v0.32.6+) ---
+    // Refresh the local copy on every state poll so admin toggling the
+    // setting mid-show propagates without a viewer reload.
+    if (typeof data.allowVoteChange === 'boolean') {
+      allowVoteChange = data.allowVoteChange;
+    }
+
+    // --- Location code flag (v0.33.24+) ---
+    if (typeof data.requiresLocationCode === 'boolean') {
+      boot.requiresLocationCode = data.requiresLocationCode;
+    }
+
+    // --- Show name → document title (v0.33.6+) ---
+    // Admin renaming the show in settings updates every viewer's tab
+    // title within a poll. We only overwrite document.title if it
+    // currently matches the previously-seen show name — that way a
+    // template that hard-coded its own <title> (which the server-side
+    // renderer respects) keeps it.
+    if (data.showName) {
+      if (lastKnownShowName === null) {
+        lastKnownShowName = data.showName;
+      } else if (data.showName !== lastKnownShowName) {
+        if (document.title === lastKnownShowName) {
+          document.title = data.showName;
+        }
+        lastKnownShowName = data.showName;
+      }
+    }
+
+    // --- Now-playing timer (v0.32.9+) ---
+    // The server sends started_at + duration on every state poll. Pass
+    // both (even if null — that's how we know to render --:--).
+    updateTimerFromState(data.nowPlayingStartedAtIso || null, data.nowPlayingDurationSeconds || null);
+
+    if (typeof data.currentVotingRound === 'number') {
+      if (lastKnownRoundId !== null && data.currentVotingRound !== lastKnownRoundId) {
+        // Round advanced. Clear local vote state regardless of whether
+        // the new round has zero votes yet (someone else may have
+        // already voted before this client polled).
+        hasVoted = false;
+        hasTiebreakVoted = false;
+        votedFor = null;
+      }
+      lastKnownRoundId = data.currentVotingRound;
+    }
+    // Legacy fallback: if we have no round id (older server) but vote
+    // counts came back empty, the round was reset. Same effect.
     if (data.viewerControlMode === 'VOTING' && data.voteCounts && data.voteCounts.length === 0) {
       hasVoted = false;
+      votedFor = null;
+    }
+
+    // --- Tiebreak state (v0.24.0+) ---
+    // If the server reports a tiebreak in progress and we don't already
+    // have one displayed, render the UI now. This handles page-reload
+    // mid-tiebreak — the socket event already fired before we connected,
+    // so we rely on /api/state to surface the active tiebreak. If the
+    // server says no tiebreak but we have one displayed (race or dump),
+    // clean up.
+    if (data.tiebreak && data.tiebreak.candidates && data.tiebreak.candidates.length >= 2) {
+      if (!tiebreakState) {
+        // Compute deadline. Server sends ISO timestamp for the absolute
+        // deadline (capped at song-end on the server side). Append 'Z'
+        // since SQLite stores UTC without the marker.
+        const deadlineMs = data.tiebreak.deadlineAtIso
+          ? new Date(data.tiebreak.deadlineAtIso + 'Z').getTime()
+          : Date.now() + 60000;
+        // Look up display info for each candidate from the sequences list
+        const seqByName = {};
+        (data.sequences || []).forEach(s => { seqByName[s.name] = s; });
+        const candidates = data.tiebreak.candidates.map(name => {
+          const seq = seqByName[name] || {};
+          return {
+            sequenceName: name,
+            displayName: seq.display_name || name,
+            artist: seq.artist || '',
+            imageUrl: seq.image_url || '',
+          };
+        });
+        showTiebreakUI({
+          candidates,
+          deadlineAtMs: deadlineMs,
+        });
+      }
+    } else if (tiebreakState) {
+      // Server says no tiebreak but we have one. Clean up.
+      clearTiebreakUI();
     }
 
     // --- NOW_PLAYING text ---
@@ -248,6 +580,27 @@
         ? (data.sequences || []).find(s => s.name === data.nowPlaying)?.display_name || data.nowPlaying
         : '—';
       if (nowEl.textContent !== nowDisplay) nowEl.textContent = nowDisplay;
+    }
+
+    // --- NOW_PLAYING_IMAGE (v0.32.13+) ---
+    // Updates any <img data-showpilot-now-img> elements when the playing
+    // song changes. Hides the image when no song is playing, or when the
+    // current song has no cover art (image_url empty / null on the
+    // sequence row).
+    const nowImgEls = document.querySelectorAll('[data-showpilot-now-img]');
+    if (nowImgEls.length) {
+      const nowSeq = data.nowPlaying
+        ? (data.sequences || []).find(s => s.name === data.nowPlaying)
+        : null;
+      const nowImgUrl = nowSeq && nowSeq.image_url ? nowSeq.image_url : '';
+      nowImgEls.forEach(el => {
+        if (nowImgUrl) {
+          if (el.getAttribute('src') !== nowImgUrl) el.setAttribute('src', nowImgUrl);
+          if (el.style.display === 'none') el.style.display = '';
+        } else {
+          el.style.display = 'none';
+        }
+      });
     }
 
     // --- NEXT_PLAYLIST text (RF templates use .body_text inside the jukebox container) ---
@@ -272,20 +625,41 @@
     if (queueListEl) {
       const byName = Object.fromEntries((data.sequences || []).map(s => [s.name, s]));
       if ((data.queue || []).length === 0) {
-        queueListEl.textContent = 'Queue is empty.';
+        // Match the server-side renderQueue empty-state shape (v0.32.13+).
+        queueListEl.innerHTML = '<div class="queue-empty">Queue is empty.</div>';
       } else {
+        // Match the server-side renderQueue shape: each entry is its own
+        // <div class="queue-item"> so RF Page Builder's `.queue-list > div`
+        // selector matches.
         queueListEl.innerHTML = data.queue.map(e => {
           const seq = byName[e.sequence_name];
           const name = seq ? seq.display_name : e.sequence_name;
-          return escapeHtml(name);
-        }).join('<br />');
+          return `<div class="queue-item" data-seq="${escapeAttr(e.sequence_name)}">${escapeHtml(name)}</div>`;
+        }).join('');
       }
     }
+
+    // --- Sequence list live rebuild (v0.33.6+) ---
+    // When admin adds/removes/reorders/renames sequences (or edits
+    // display_name / artist / image_url), the viewer's clickable grid is
+    // stale until refresh. We mirror renderPlaylistGrid from
+    // lib/viewer-renderer.js client-side and rebuild the affected
+    // wrapper's innerHTML when the data signature changes.
+    //
+    // We find the wrapper by walking up from any [data-seq] element.
+    // Templates have at most two wrappers (one in the jukebox container,
+    // one in the voting container, if they support both modes). If the
+    // server-rendered list was empty at page load, there are no [data-seq]
+    // anchors and we can't find the wrapper — viewers in that narrow case
+    // need a refresh to see newly-added sequences. Documented as known.
+    rebuildPlaylistGridIfNeeded(data);
 
     // --- Sequence cover images (live-update when admin changes a cover) ---
     // Each sequence-image carries data-seq-name so we can target it precisely.
     // The server returns image_url with a ?v=<mtime> cache-buster, so a different
-    // src means the cover was updated.
+    // src means the cover was updated. After rebuildPlaylistGridIfNeeded this is
+    // typically a no-op (the rebuild used the new url) — kept as a lighter-weight
+    // path for the "only the cover changed" case where rebuild was skipped.
     (data.sequences || []).forEach(seq => {
       if (!seq.image_url) return;
       const imgs = document.querySelectorAll(`img[data-seq-name="${CSS.escape(seq.name)}"]`);
@@ -298,12 +672,36 @@
 
     // --- Mode container visibility ---
     // Both data-showpilot-container and data-openfalcon-container are honored
-    // so templates from earlier versions keep working.
+    // so templates from earlier versions keep working. We toggle via the
+    // HTML5 `hidden` attribute (matching the server-side renderer in
+    // v0.33.8+), AND clear any inline `display:none` left by older
+    // server renders (in case the user is running a viewer page that
+    // was loaded before a server upgrade). Idempotent on repeat calls.
+    function setVisible(el, visible) {
+      if (visible) {
+        el.removeAttribute('hidden');
+        // If a previous render set inline display:none, clear it. Don't
+        // touch any non-display inline styles the template author may
+        // have placed (margin, etc.) — only flip display.
+        if (el.style && el.style.display === 'none') el.style.display = '';
+      } else {
+        el.setAttribute('hidden', '');
+        // Belt-and-braces: also set inline display:none for older
+        // viewer-side code paths that may have read it directly.
+        if (el.style) el.style.display = 'none';
+      }
+    }
     document.querySelectorAll('[data-showpilot-container="jukebox"], [data-openfalcon-container="jukebox"]').forEach(el => {
-      el.style.display = data.viewerControlMode === 'JUKEBOX' ? '' : 'none';
+      setVisible(el, data.viewerControlMode === 'JUKEBOX');
     });
     document.querySelectorAll('[data-showpilot-container="voting"], [data-openfalcon-container="voting"]').forEach(el => {
-      el.style.display = data.viewerControlMode === 'VOTING' ? '' : 'none';
+      setVisible(el, data.viewerControlMode === 'VOTING');
+    });
+    // After-hours: visible when viewer control is OFF. Mirror of the server-side
+    // logic in viewer-renderer.js, so flipping the admin "Off" toggle propagates
+    // to viewers within one poll without requiring a reload.
+    document.querySelectorAll('[data-showpilot-container="afterhours"]').forEach(el => {
+      setVisible(el, data.viewerControlMode === 'OFF');
     });
   }
 
@@ -321,6 +719,361 @@
   // Poll state every 3s for live updates (Socket.io provides instant updates too)
   setInterval(refreshState, 3000);
 
+  // ============================================================
+  // Tiebreak UI (v0.24.0+)
+  // ============================================================
+  // Renders a sticky banner at the top of the page when a tiebreak is
+  // active, plus visual emphasis on the tied candidates within the
+  // existing voting list. The banner shows a countdown timer and
+  // lists the tied songs as tap targets — tapping casts a tiebreak
+  // vote via /api/tiebreak-vote (rather than the regular /api/vote).
+  //
+  // Design intent: the existing voting list stays intact so users can
+  // see the score progression. We just overlay an urgent banner and
+  // mark the candidates with a visible badge so users know which two
+  // are eligible for the tiebreak vote.
+  function showTiebreakUI(data) {
+    if (!data || !Array.isArray(data.candidates) || data.candidates.length < 2) return;
+    // The deadline is a wall-clock moment, computed server-side as
+    // min(timer-cap, current-song-end). The viewer countdown is just
+    // (deadline - now) capped at 0 — no need to know the configured
+    // timer duration, just the absolute end moment.
+    const deadlineMs = data.deadlineAtMs || (data.startedAtMs && data.durationSec
+      ? data.startedAtMs + data.durationSec * 1000
+      : Date.now() + 60000);
+    tiebreakState = {
+      candidates: data.candidates,
+      deadlineMs,
+    };
+    hasTiebreakVoted = false;
+    renderTiebreakBanner();
+    markTiebreakCandidatesInList();
+    startTiebreakCountdown();
+  }
+
+  function clearTiebreakUI() {
+    tiebreakState = null;
+    if (tiebreakCountdownTimer) {
+      clearInterval(tiebreakCountdownTimer);
+      tiebreakCountdownTimer = null;
+    }
+    const banner = document.getElementById('showpilot-tiebreak-banner');
+    if (banner) banner.remove();
+    document.querySelectorAll('.cell-vote-playlist').forEach(el => {
+      el.classList.remove('showpilot-tiebreak-candidate');
+      const badge = el.querySelector('.showpilot-tie-badge');
+      if (badge) badge.remove();
+    });
+  }
+
+  function renderTiebreakBanner() {
+    let banner = document.getElementById('showpilot-tiebreak-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'showpilot-tiebreak-banner';
+      // Inline styles — keeps the banner self-contained even if a
+      // template's CSS doesn't include rules for it. Templates can
+      // restyle by setting CSS variables (--showpilot-tiebreak-bg etc.)
+      // or by overriding #showpilot-tiebreak-banner directly.
+      banner.style.cssText = [
+        'position: fixed',
+        'top: 0',
+        'left: 0',
+        'right: 0',
+        'z-index: 9997',
+        'padding: 14px 18px',
+        'background: var(--showpilot-tiebreak-bg, linear-gradient(135deg, #d63031, #6c0e0e))',
+        'color: var(--showpilot-tiebreak-text, #fff)',
+        'font-family: var(--showpilot-toast-font, system-ui, -apple-system, sans-serif)',
+        'box-shadow: 0 6px 18px rgba(0,0,0,0.5)',
+        'animation: showpilot-tb-shake 0.7s cubic-bezier(.36,.07,.19,.97) both',
+        'animation-iteration-count: 2',
+      ].join(';');
+      document.body.appendChild(banner);
+      // Add keyframes once
+      if (!document.getElementById('showpilot-tb-keyframes')) {
+        const styleEl = document.createElement('style');
+        styleEl.id = 'showpilot-tb-keyframes';
+        styleEl.textContent = `
+          @keyframes showpilot-tb-shake {
+            10%, 90% { transform: translate3d(-1px, 0, 0); }
+            20%, 80% { transform: translate3d(2px, 0, 0); }
+            30%, 50%, 70% { transform: translate3d(-3px, 0, 0); }
+            40%, 60% { transform: translate3d(3px, 0, 0); }
+          }
+          @keyframes showpilot-tb-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(255, 80, 80, 0.7); }
+            50% { box-shadow: 0 0 0 10px rgba(255, 80, 80, 0); }
+          }
+          .showpilot-tiebreak-candidate {
+            outline: 3px solid var(--showpilot-tiebreak-accent, #ff5050) !important;
+            outline-offset: -3px;
+            animation: showpilot-tb-pulse 1.5s infinite;
+          }
+          .showpilot-tie-badge {
+            display: inline-block;
+            background: var(--showpilot-tiebreak-bg, #d63031);
+            color: var(--showpilot-tiebreak-text, #fff);
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 999px;
+            margin-left: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            vertical-align: middle;
+          }
+          #showpilot-tiebreak-banner button {
+            background: rgba(255,255,255,0.18);
+            border: 1px solid rgba(255,255,255,0.4);
+            color: inherit;
+            font-family: inherit;
+            font-size: 0.95rem;
+            font-weight: 600;
+            padding: 8px 14px;
+            margin: 4px;
+            border-radius: 8px;
+            cursor: pointer;
+          }
+          #showpilot-tiebreak-banner button:hover {
+            background: rgba(255,255,255,0.3);
+          }
+          #showpilot-tiebreak-banner button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+          }
+        `;
+        document.head.appendChild(styleEl);
+      }
+    }
+    if (!tiebreakState) return;
+    const candList = tiebreakState.candidates.map(c => `
+      <button data-tb-candidate="${escapeAttr(c.sequenceName)}" onclick="window.ShowPilotTiebreakVote('${escapeJsString(c.sequenceName)}')">
+        ${escapeHtml(c.displayName || c.sequenceName)}
+      </button>
+    `).join('');
+    banner.innerHTML = `
+      <div style="text-align:center;">
+        <div style="font-weight:800;font-size:1.05rem;letter-spacing:0.05em;text-transform:uppercase;">
+          ⚡ Tiebreak — Vote Now ⚡
+        </div>
+        <div style="font-size:0.85rem;opacity:0.9;margin-top:4px;">
+          Vote within <span id="showpilot-tb-countdown">--</span>s or all votes are dumped.
+        </div>
+        <div style="margin-top:10px;display:flex;flex-wrap:wrap;justify-content:center;">
+          ${candList}
+        </div>
+      </div>
+    `;
+  }
+
+  function markTiebreakCandidatesInList() {
+    if (!tiebreakState) return;
+    const candidateNames = tiebreakState.candidates.map(c => c.sequenceName);
+    document.querySelectorAll('.cell-vote-playlist').forEach(el => {
+      const seqName = el.getAttribute('data-seq');
+      if (seqName && candidateNames.includes(seqName)) {
+        el.classList.add('showpilot-tiebreak-candidate');
+        if (!el.querySelector('.showpilot-tie-badge')) {
+          const badge = document.createElement('span');
+          badge.className = 'showpilot-tie-badge';
+          badge.textContent = 'TIE';
+          el.appendChild(badge);
+        }
+      }
+    });
+  }
+
+  function startTiebreakCountdown() {
+    if (tiebreakCountdownTimer) clearInterval(tiebreakCountdownTimer);
+    const tick = () => {
+      if (!tiebreakState) return;
+      const remaining = Math.max(0, Math.ceil((tiebreakState.deadlineMs - Date.now()) / 1000));
+      const cdEl = document.getElementById('showpilot-tb-countdown');
+      if (cdEl) cdEl.textContent = String(remaining);
+      if (remaining <= 0) {
+        // Visual feedback that timer is up. Server will emit tiebreakFailed
+        // (or we'll get a state update with no tiebreak active) shortly,
+        // and that will clean us up.
+        if (cdEl) cdEl.textContent = 'time up';
+      }
+    };
+    tick();
+    tiebreakCountdownTimer = setInterval(tick, 250);
+  }
+
+  function showTiebreakFailedToast(data) {
+    // Use the existing winner-toast infrastructure with different content.
+    // We don't have the renderer's showWinnerToast helper exposed to us,
+    // so just log and rely on the "votes dumped" implication being clear
+    // when the tiebreak banner disappears. Templates can listen for the
+    // socket event themselves if they want a custom failure UI.
+    console.info('[ShowPilot] tiebreak expired — votes dumped:', data);
+  }
+
+  // Vote click during tiebreak — routes to the tiebreak endpoint instead
+  // of the main vote endpoint. Exposed globally so the banner buttons can
+  // call it directly. Returns nothing; uses showMessage for feedback.
+  window.ShowPilotTiebreakVote = async function(sequenceName) {
+    if (hasTiebreakVoted) {
+      showMessage(MSG_IDS.alreadyVoted);
+      return;
+    }
+    let body;
+    try { body = await buildBody({ sequenceName }); }
+    catch { return; }
+    const result = await postJson('/api/tiebreak-vote', body);
+    if (result.ok) {
+      hasTiebreakVoted = true;
+      showMessage(MSG_IDS.voteSuccess);
+      // (v0.32.11+) Same reasoning as ShowPilotVote — refresh immediately
+      // so the user sees their tiebreak vote register without waiting on
+      // the tiebreakVoteUpdate socket event.
+      refreshState();
+    } else {
+      showMessage(mapErrorToId(result.data?.error, result.data), undefined, undefined, result.data?.error);
+    }
+  };
+
+  function escapeAttr(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  }
+  function escapeJsString(s) {
+    return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  }
+
+  // ============================================================
+  // Playlist grid live rebuild (v0.33.6+)
+  // ============================================================
+  // Mirrors lib/viewer-renderer.js#renderPlaylistGrid so the viewer's
+  // clickable list updates without a refresh when admin edits the
+  // sequence list. Called from applyStateUpdate on every state poll.
+  //
+  // We find playlist wrappers by walking up from any [data-seq]
+  // element. The wrapper is the parent that holds rows. Templates may
+  // have one (single-mode template) or two (dual-mode template, one
+  // wrapper per mode-container). We rebuild each wrapper independently
+  // and only when its computed signature differs from the data — so
+  // unchanged wrappers don't churn the DOM and unrelated event handlers
+  // / hover state survive.
+  //
+  // The empty-initial-load edge case: if the page was rendered with
+  // zero sequences, there are no [data-seq] anchors to find a wrapper
+  // by, and a subsequent admin sequence-add won't appear until the
+  // viewer refreshes. Acceptable trade-off — alternative would be
+  // emitting a sentinel element on every {PLAYLISTS} substitution,
+  // which risks breaking template CSS that targets direct-child
+  // siblings (.voting_table grid-template-columns, etc.).
+
+  // Stable signature of the desired grid contents — name, display_name,
+  // artist, and image_url. Order matters (admin-controlled ordering is
+  // meaningful). Mode is included so a JUKEBOX→VOTING flip forces a
+  // rebuild. Vote counts are intentionally excluded: they're managed by
+  // the direct DOM update in applyStateUpdate and don't need a full
+  // innerHTML rebuild on every vote change.
+  function computeGridSignature(sequences, mode) {
+    const parts = [mode];
+    for (const s of sequences) {
+      parts.push(
+        s.name + '|' +
+        (s.display_name || '') + '|' +
+        (s.artist || '') + '|' +
+        (s.image_url || '')
+        // vote counts excluded — managed by the direct DOM update in applyStateUpdate
+      );
+    }
+    return parts.join('\n');
+  }
+
+  // Mirror of the server's renderPlaylistGrid — must produce IDENTICAL
+  // markup so click handlers and template CSS keep working. If you
+  // change one side, change the other. (Tested by comparing rendered
+  // HTML in /tmp/test-playlist-rebuild.js.)
+  //
+  // Note: we use escapeHtml (not escapeAttr) for data-seq and
+  // data-seq-name values because that's what the server-side renderer
+  // does — escapeAttr doesn't escape ' or > and would produce
+  // divergent markup for sequences with those chars in their names.
+  function renderRowsForMode(sequences, voteCountsByName, mode) {
+    return sequences.map(seq => {
+      const safeNameJs = escapeJsString(seq.name);
+      const safeNameAttr = escapeHtml(seq.name);
+      const safeDisplay = escapeHtml(seq.display_name || seq.name);
+      const safeArtist = seq.artist ? escapeHtml(seq.artist) : '';
+      const count = voteCountsByName[seq.name] || 0;
+      // width/height are presentational hints — author CSS overrides them.
+      // See lib/viewer-renderer.js renderPlaylistGrid for the full rationale.
+      // Mirror the server-side defaults here so live rebuilds (mode flip,
+      // sequence list change) don't reintroduce native-resolution images.
+      const artImg = seq.image_url
+        ? `<img class="sequence-image" data-seq-name="${safeNameAttr}" src="${escapeHtml(seq.image_url)}" alt="" width="40" height="40" loading="lazy" />`
+        : '';
+      if (mode === 'VOTING') {
+        return `<div class="cell-vote-playlist sequence-item" onclick="ShowPilotVote('${safeNameJs}')" data-seq="${safeNameAttr}"><div>${artImg}<span class="sequence-name">${safeDisplay}</span><div class="cell-vote-playlist-artist sequence-artist">${safeArtist}</div><span class="sequence-votes" data-seq-votes="${safeNameAttr}">${count}</span></div></div><div class="cell-vote" data-seq-count="${safeNameAttr}">${count}</div>`;
+      } else {
+        return `<div class="jukebox-list sequence-item" onclick="ShowPilotRequest('${safeNameJs}')" data-seq="${safeNameAttr}"><div>${artImg}<span class="sequence-name">${safeDisplay}</span><div class="jukebox-list-artist sequence-artist">${safeArtist}</div><span class="sequence-requests" data-seq-requests="${safeNameAttr}"></span></div></div>`;
+      }
+    }).join('');
+  }
+
+  // Find the unique playlist wrapper(s) by walking up from existing rows.
+  // Returns 0, 1, or 2 elements depending on template shape.
+  function findPlaylistWrappers() {
+    const wrappers = new Set();
+    document.querySelectorAll('[data-seq]').forEach(el => {
+      // Skip queue items and tiebreak candidate buttons — they also use
+      // data-seq but live in different parents. Identify them by class.
+      if (el.classList.contains('queue-item')) return;
+      if (el.hasAttribute('data-tb-candidate')) return;
+      if (el.parentElement) wrappers.add(el.parentElement);
+    });
+    return Array.from(wrappers);
+  }
+
+  // Per-wrapper signature cache so we only rebuild on actual change.
+  // WeakMap so detached wrappers GC normally.
+  const _gridSigCache = new WeakMap();
+
+  function rebuildPlaylistGridIfNeeded(data) {
+    const sequences = data.sequences || [];
+    const mode = data.viewerControlMode || 'OFF';
+    // Only meaningful in JUKEBOX or VOTING; in OFF the mode containers
+    // are hidden, so rebuilding their stale contents wastes work but
+    // doesn't hurt. Skip to keep churn low.
+    if (mode !== 'JUKEBOX' && mode !== 'VOTING') return;
+
+    const voteCountsByName = {};
+    (data.voteCounts || []).forEach(v => { voteCountsByName[v.sequence_name] = v.count; });
+    const desiredSig = computeGridSignature(sequences, mode);
+
+    const wrappers = findPlaylistWrappers();
+    if (wrappers.length === 0) return; // Empty-initial-load edge case.
+
+    for (const wrapper of wrappers) {
+      // Determine which mode this wrapper belongs to. Walk up to the
+      // nearest [data-showpilot-container] ancestor and read its mode.
+      // If no container ancestor (single-mode template with no mode
+      // container), assume the active mode.
+      let targetMode = mode;
+      let cur = wrapper;
+      while (cur && cur !== document.body) {
+        const c = cur.getAttribute && cur.getAttribute('data-showpilot-container');
+        if (c === 'jukebox') { targetMode = 'JUKEBOX'; break; }
+        if (c === 'voting') { targetMode = 'VOTING'; break; }
+        cur = cur.parentElement;
+      }
+      // Only rebuild a wrapper whose mode matches the active mode —
+      // the inactive one is hidden anyway and won't be seen.
+      if (targetMode !== mode) continue;
+
+      const wrapperSig = _gridSigCache.get(wrapper);
+      if (wrapperSig === desiredSig) continue;
+
+      wrapper.innerHTML = renderRowsForMode(sequences, voteCountsByName, targetMode);
+      _gridSigCache.set(wrapper, desiredSig);
+    }
+  }
+
   // Initial heartbeat + immediate state refresh
   fetch('/api/heartbeat', { method: 'POST', credentials: 'include' }).catch(() => {});
   refreshState();
@@ -332,11 +1085,51 @@
       socket.on('voteUpdate', () => refreshState());
       socket.on('queueUpdated', () => refreshState());
       socket.on('nowPlaying', () => refreshState());
-      socket.on('voteReset', () => { hasVoted = false; refreshState(); });
-      socket.on('sequencesReordered', () => refreshState()); // covers updated, sequences edited, etc.
+      socket.on('voteReset', () => {
+        hasVoted = false;
+        hasTiebreakVoted = false;
+        votedFor = null;
+        // Clear any tiebreak banner that's still on screen — round
+        // moved on (either resolution succeeded or timer expired).
+        clearTiebreakUI();
+        refreshState();
+      });
+      socket.on('sequencesReordered', () => refreshState());
       socket.on('sequencesSynced', () => refreshState());
+      // Mode toggle (admin flipping JUKEBOX / VOTING / OFF) — fires
+      // server-side in routes/plugin.js. Without this, viewers wait up
+      // to 3s for the next poll to see the after-hours block appear or
+      // the active grid swap. With it, propagation is instant.
+      socket.on('viewerModeChanged', () => refreshState());
+      // ---- Tiebreak events (v0.24.0+) ----
+      socket.on('tiebreakStarted', (data) => {
+        showTiebreakUI(data);
+      });
+      socket.on('tiebreakFailed', (data) => {
+        showTiebreakFailedToast(data);
+        clearTiebreakUI();
+      });
+      socket.on('tiebreakVoteUpdate', () => refreshState());
+      // On reconnect (after network blip or mobile background-suspend),
+      // resync state immediately. Otherwise we'd keep showing whatever
+      // round we had before disconnect, including a stale "already
+      // voted" gate. Socket.io fires 'connect' both on initial connect
+      // and on each reconnect, so this covers both.
+      socket.on('connect', () => refreshState());
     }
   } catch {}
+
+  // Mobile devices commonly suspend background tabs aggressively. When
+  // the user comes back to the page (visibilitychange to 'visible'),
+  // pull a fresh state so we don't continue working from stale data.
+  // Pairs with the socket reconnect handler above — covers the case
+  // where the socket reconnected silently in the background but the
+  // tab missed events while suspended.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      refreshState();
+    }
+  });
 
   // ============================================================
   // LISTEN ON PHONE — Web Audio API player with sample-precise sync
@@ -357,105 +1150,494 @@
   // status pill while audio keeps playing.
   // ============================================================
   // ============================================================
-  // PAGE-WIDE SNOW — gently falling snowflakes across the viewer page
-  // Toggleable live via admin Viewer Page tab — polls /api/visual-config
-  // every 5 seconds and creates/destroys the snow layer accordingly.
-  // pointer-events:none so it doesn't block clicks. Auto-disabled when
-  // prefers-reduced-motion is set at the OS level.
   // ============================================================
-  (function initPageSnow() {
+  // PAGE EFFECTS — full-screen ambient overlays (snow, leaves,
+  // fireworks, hearts, stars, bats, confetti, petals, embers,
+  // bubbles, rain — plus 'none').
+  //
+  // Three knobs from the server:
+  //   pageEffect          — string id (see EFFECTS table below)
+  //   pageEffectColor     — '' for the effect's default, or any CSS color
+  //   pageEffectIntensity — 'subtle' | 'medium' | 'heavy'
+  //
+  // Engine contract: each effect declares { name, defaultColor, build }.
+  // build(layer, color, count) populates `layer` with absolutely-positioned
+  // children using whatever animations the effect needs. The engine
+  // handles the layer container, lifecycle (start/stop/swap), and
+  // prefers-reduced-motion respect. Effects don't need to clean up — when
+  // we swap, we drop the whole layer and rebuild.
+  //
+  // Backward compat: bootstrap.pageSnowEnabled is mapped to pageEffect='snow'
+  // by the server, so old templates that hardcoded that name keep working.
+  //
+  // pointer-events:none on the layer so it never blocks clicks. z-index
+  // sits above page background but below the player bar.
+  // ============================================================
+  // ============================================================
+  // Long-name truncation guard (v0.32.14+)
+  // ============================================================
+  // Some imported third-party templates (e.g. RF Page Builder)
+  // style `.sequence-name` with `white-space: nowrap; overflow: hidden;
+  // text-overflow: ellipsis;`. That assumes one-line song titles. Real
+  // shows have titles like "Walk the Dinosaur (From Ice Age: Dawn of
+  // the Dinosaurs)" which then truncate to "Walk the Din…". The
+  // template author can't anticipate every show's catalog, and asking
+  // every operator to learn CSS to fix it is a non-starter.
+  //
+  // Strategy: inject a low-specificity defensive rule that allows
+  // wrapping AND caps at 2 lines. We scope it to .sequence-name inside
+  // .sequence-item — that's RF Page Builder territory. Built-in
+  // ShowPilot templates and canonical RF templates never style
+  // .sequence-name (they target .jukebox-list / .cell-vote-playlist
+  // descendants), so this override is invisible to them.
+  //
+  // We use !important so RFPB's existing rules don't beat us. The
+  // 2-line clamp uses both the modern `line-clamp` and the legacy
+  // `-webkit-line-clamp` for browser coverage; modern browsers honor
+  // both. The min-width:0 guard prevents flex children from refusing
+  // to shrink and overflowing their card.
+  // ============================================================
+  (function initSequenceNameWrap() {
+    if (document.getElementById('of-seqname-wrap-style')) return; // idempotent
+    const style = document.createElement('style');
+    style.id = 'of-seqname-wrap-style';
+    style.textContent = `
+      .sequence-item .sequence-name {
+        white-space: normal !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        display: -webkit-box !important;
+        -webkit-line-clamp: 2 !important;
+        line-clamp: 2 !important;
+        -webkit-box-orient: vertical !important;
+        word-break: break-word;
+        min-width: 0;
+      }
+      .sequence-item .sequence-artist {
+        white-space: normal !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        display: -webkit-box !important;
+        -webkit-line-clamp: 1 !important;
+        line-clamp: 1 !important;
+        -webkit-box-orient: vertical !important;
+        word-break: break-word;
+        min-width: 0;
+      }
+    `;
+    // Append to <head> so it lands before the template's late <style>
+    // blocks at the end of <body>. CSS source order is what determines
+    // which rule wins among tied specificity, so position matters; but
+    // we also use !important to win across the board against templates
+    // that put nowrap rules in the body's late <style>.
+    (document.head || document.documentElement).appendChild(style);
+  })();
+
+  // ============================================================
+  // Page effects engine — snow / leaves / etc.
+  (function initPageEffects() {
     const prefersReduced = window.matchMedia &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (prefersReduced) return; // nothing we can do — respect the setting always
+    if (prefersReduced) return; // respect OS-level motion preference always
 
-    let snowLayer = null;
-    let snowStyleEl = null;
+    let layer = null;
+    let styleEl = null;
+    // Track last-applied state to avoid pointless rebuilds. The poll runs
+    // every 5s; if nothing changed we skip the DOM churn (and the visual
+    // restart of the animations).
+    let last = { name: null, color: null, intensity: null };
 
-    // CSS keyframes go in once and stay (no harm leaving them present)
-    function ensureSnowStyle() {
-      if (snowStyleEl) return;
-      snowStyleEl = document.createElement('style');
-      snowStyleEl.textContent = `
-        @keyframes ofPageSnowFall {
+    // ============================================================
+    // KEYFRAMES — emitted once, shared across all effects. We don't
+    // namespace per-effect because most fall/drift effects share the
+    // same fall + sway pattern; keeping it DRY makes the file shorter.
+    // ============================================================
+    function ensureStyle() {
+      if (styleEl) return;
+      styleEl = document.createElement('style');
+      styleEl.textContent = `
+        @keyframes ofPageFall {
           0%   { transform: translateY(-30px) rotate(0deg); }
-          100% { transform: translateY(105vh) rotate(360deg); }
+          100% { transform: translateY(108vh) rotate(360deg); }
         }
-        @keyframes ofPageSnowSway {
+        @keyframes ofPageDrift {
+          0%   { transform: translateY(-30px) rotate(-25deg); }
+          100% { transform: translateY(108vh) rotate(335deg); }
+        }
+        @keyframes ofPageSway {
           0%   { margin-left: 0; }
-          100% { margin-left: var(--of-sway); }
+          100% { margin-left: var(--of-sway, 30px); }
+        }
+        @keyframes ofPageRise {
+          0%   { transform: translateY(110vh) rotate(0deg); opacity: 0; }
+          10%  { opacity: var(--of-peak-opacity, 0.8); }
+          90%  { opacity: var(--of-peak-opacity, 0.8); }
+          100% { transform: translateY(-30px) rotate(360deg); opacity: 0; }
+        }
+        @keyframes ofPageTwinkle {
+          0%, 100% { opacity: 0.2; transform: scale(0.8); }
+          50%      { opacity: 1;   transform: scale(1.1); }
+        }
+        @keyframes ofPageBatFly {
+          0%   { transform: translateX(-12vw) translateY(0); }
+          100% { transform: translateX(112vw) translateY(var(--of-bat-dy, 8vh)); }
+        }
+        @keyframes ofPageBatFlap {
+          0%, 100% { transform: scaleY(1); }
+          50%      { transform: scaleY(0.55); }
+        }
+        @keyframes ofPageRain {
+          0%   { transform: translateY(-30vh); }
+          100% { transform: translateY(108vh); }
+        }
+        @keyframes ofPageBurst {
+          0%   { transform: scale(0); opacity: 0; }
+          10%  { opacity: 1; }
+          70%  { opacity: 1; }
+          100% { transform: scale(1); opacity: 0; }
         }
       `;
-      document.head.appendChild(snowStyleEl);
+      document.head.appendChild(styleEl);
     }
 
-    function startSnow() {
-      if (snowLayer) return; // already running
-      ensureSnowStyle();
-      snowLayer = document.createElement('div');
-      snowLayer.id = 'of-page-snow';
-      snowLayer.setAttribute('aria-hidden', 'true');
-      snowLayer.style.cssText = `
-        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        pointer-events: none; z-index: 9990; overflow: hidden;
-      `;
-      const flakeSvg = `<svg viewBox="0 0 14 14" xmlns="http://www.w3.org/2000/svg">
-        <g stroke="#ffffff" stroke-width="0.8" stroke-linecap="round" fill="none" opacity="0.9">
-          <line x1="7" y1="1" x2="7" y2="13"/>
-          <line x1="1" y1="7" x2="13" y2="7"/>
-          <line x1="2.5" y1="2.5" x2="11.5" y2="11.5"/>
-          <line x1="2.5" y1="11.5" x2="11.5" y2="2.5"/>
-          <path d="M 7,2 L 6,3 M 7,2 L 8,3"/>
-          <path d="M 7,12 L 6,11 M 7,12 L 8,11"/>
-          <path d="M 2,7 L 3,6 M 2,7 L 3,8"/>
-          <path d="M 12,7 L 11,6 M 12,7 L 11,8"/>
-        </g>
-      </svg>`;
-      const flakeCount = 50;
-      for (let i = 0; i < flakeCount; i++) {
-        const flake = document.createElement('div');
-        const size = 8 + Math.random() * 14;
-        const left = Math.random() * 100;
-        const duration = 8 + Math.random() * 10;
-        const delay = -Math.random() * duration;
-        const sway = 20 + Math.random() * 40;
-        const opacity = 0.4 + Math.random() * 0.5;
-        flake.style.cssText = `
-          position: absolute;
-          left: ${left}vw;
-          top: -30px;
-          width: ${size}px;
-          height: ${size}px;
-          opacity: ${opacity};
-          filter: drop-shadow(0 0 2px rgba(255,255,255,0.4));
-          animation: ofPageSnowFall ${duration}s linear infinite,
-                     ofPageSnowSway ${duration / 2}s ease-in-out infinite alternate;
-          animation-delay: ${delay}s, ${delay}s;
-          --of-sway: ${sway}px;
-        `;
-        flake.innerHTML = flakeSvg;
-        snowLayer.appendChild(flake);
+    // ============================================================
+    // INTENSITY MAPS — per-effect particle counts.
+    // Heavier effects (fireworks, bats) ship fewer at "heavy" than
+    // small confetti would, because each is bigger / more visually loud.
+    // ============================================================
+    const COUNTS = {
+      // [subtle, medium, heavy]
+      snow:      [25, 50, 90],
+      leaves:    [15, 30, 55],
+      fireworks: [3,  6,  12],
+      hearts:    [20, 40, 70],
+      stars:     [30, 60, 110],
+      bats:      [3,  6,  10],
+      confetti:  [40, 80, 140],
+      petals:    [20, 40, 70],
+      embers:    [25, 50, 90],
+      bubbles:   [15, 30, 55],
+      rain:      [60, 120, 200],
+    };
+    function pickCount(name, intensity) {
+      const arr = COUNTS[name];
+      if (!arr) return 0;
+      const idx = intensity === 'subtle' ? 0 : intensity === 'heavy' ? 2 : 1;
+      return arr[idx];
+    }
+
+    // ============================================================
+    // EFFECT DEFINITIONS — each is { defaultColor, build(layer, color, count) }.
+    // `color` is always a non-empty string here (the engine substitutes
+    // defaultColor when the admin left the override blank).
+    //
+    // Each effect creates absolutely-positioned children inside `layer`.
+    // Random number tweaks aim for "feels alive" not "looks identical".
+    // ============================================================
+    const EFFECTS = {
+      // ---------- SNOW ----------
+      snow: {
+        defaultColor: '#ffffff',
+        build(root, color, count) {
+          const flakeSvg = (col) => `<svg viewBox="0 0 14 14" xmlns="http://www.w3.org/2000/svg"><g stroke="${col}" stroke-width="0.8" stroke-linecap="round" fill="none" opacity="0.9"><line x1="7" y1="1" x2="7" y2="13"/><line x1="1" y1="7" x2="13" y2="7"/><line x1="2.5" y1="2.5" x2="11.5" y2="11.5"/><line x1="2.5" y1="11.5" x2="11.5" y2="2.5"/><path d="M 7,2 L 6,3 M 7,2 L 8,3"/><path d="M 7,12 L 6,11 M 7,12 L 8,11"/><path d="M 2,7 L 3,6 M 2,7 L 3,8"/><path d="M 12,7 L 11,6 M 12,7 L 11,8"/></g></svg>`;
+          const svgMarkup = flakeSvg(color);
+          for (let i = 0; i < count; i++) {
+            const flake = document.createElement('div');
+            const size = 8 + Math.random() * 14;
+            const left = Math.random() * 100;
+            const duration = 8 + Math.random() * 10;
+            const delay = -Math.random() * duration;
+            const sway = 20 + Math.random() * 40;
+            const opacity = 0.4 + Math.random() * 0.5;
+            flake.style.cssText = `position:absolute;left:${left}vw;top:-30px;width:${size}px;height:${size}px;opacity:${opacity};filter:drop-shadow(0 0 2px ${color}66);animation:ofPageFall ${duration}s linear infinite, ofPageSway ${duration / 2}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            flake.innerHTML = svgMarkup;
+            root.appendChild(flake);
+          }
+        },
+      },
+
+      // ---------- LEAVES ---------- (autumn maple-like silhouettes)
+      leaves: {
+        defaultColor: '#d2691e',
+        build(root, color, count) {
+          // Random palette around the chosen color so leaves look varied.
+          // We render one default svg shape and tint it via CSS filter for
+          // the "varied colors" feel without bloating the markup.
+          const leafSvg = (col) => `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2 C8 4, 4 8, 4 13 C4 18, 8 22, 12 22 C16 22, 20 18, 20 13 C20 8, 16 4, 12 2 Z M12 4 L12 22" fill="${col}" stroke="${col}" stroke-width="0.5"/></svg>`;
+          for (let i = 0; i < count; i++) {
+            const leaf = document.createElement('div');
+            const size = 16 + Math.random() * 18;
+            const left = Math.random() * 100;
+            const duration = 10 + Math.random() * 12;
+            const delay = -Math.random() * duration;
+            const sway = 60 + Math.random() * 80;
+            const opacity = 0.55 + Math.random() * 0.4;
+            // Vary the hue a little: ±20deg rotation gives autumnal range
+            const hueShift = Math.round(-20 + Math.random() * 40);
+            leaf.style.cssText = `position:absolute;left:${left}vw;top:-30px;width:${size}px;height:${size}px;opacity:${opacity};filter:hue-rotate(${hueShift}deg) drop-shadow(0 1px 2px rgba(0,0,0,0.3));animation:ofPageDrift ${duration}s linear infinite, ofPageSway ${duration / 2.5}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            leaf.innerHTML = leafSvg(color);
+            root.appendChild(leaf);
+          }
+        },
+      },
+
+      // ---------- FIREWORKS ---------- (radial bursts at random positions)
+      fireworks: {
+        defaultColor: '#ff5050',
+        build(root, color, count) {
+          // Each "firework" is a burst of N small dots radiating from a center.
+          // We stagger their delays so the sky doesn't fire all at once.
+          const sparksPerBurst = 14;
+          for (let i = 0; i < count; i++) {
+            const burst = document.createElement('div');
+            const cx = 10 + Math.random() * 80; // vw
+            const cy = 8 + Math.random() * 50;  // vh — keep above the fold mostly
+            const burstDuration = 1.6 + Math.random() * 1.2;
+            const cycle = 4 + Math.random() * 5;
+            const cycleDelay = Math.random() * cycle;
+            // Vary color slightly via hue-rotate on each spark's filter
+            const baseHue = Math.round(Math.random() * 360);
+            burst.style.cssText = `position:absolute;left:${cx}vw;top:${cy}vh;width:0;height:0;`;
+            for (let s = 0; s < sparksPerBurst; s++) {
+              const angle = (s / sparksPerBurst) * Math.PI * 2;
+              const dist = 60 + Math.random() * 50;
+              const dx = Math.cos(angle) * dist;
+              const dy = Math.sin(angle) * dist;
+              const spark = document.createElement('div');
+              spark.style.cssText = `position:absolute;left:0;top:0;width:6px;height:6px;border-radius:50%;background:${color};filter:hue-rotate(${baseHue}deg) drop-shadow(0 0 6px ${color});transform-origin:0 0;animation:sparkFly_${i}_${s} ${cycle}s ease-out infinite;animation-delay:${cycleDelay}s;`;
+              const styleId = `ofSpark_${i}_${s}`;
+              const style = document.createElement('style');
+              style.textContent = `@keyframes sparkFly_${i}_${s} { 0%,${(burstDuration/cycle*100).toFixed(0)}% { transform: translate(0,0); opacity: 1; } ${(burstDuration/cycle*100*0.6).toFixed(0)}% { opacity: 1; } ${(burstDuration/cycle*100).toFixed(0)}% { transform: translate(${dx}px,${dy}px); opacity: 0; } 100% { transform: translate(${dx}px,${dy}px); opacity: 0; } }`;
+              root.appendChild(style);
+              burst.appendChild(spark);
+            }
+            root.appendChild(burst);
+          }
+        },
+      },
+
+      // ---------- HEARTS ----------
+      hearts: {
+        defaultColor: '#ff4d8d',
+        build(root, color, count) {
+          const heartSvg = (col) => `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 21 C 12 21, 4 14, 4 8.5 C 4 5, 6.5 3, 9 3 C 10.5 3, 12 4, 12 5.5 C 12 4, 13.5 3, 15 3 C 17.5 3, 20 5, 20 8.5 C 20 14, 12 21, 12 21 Z" fill="${col}" stroke="${col}" stroke-width="0.5"/></svg>`;
+          const svgMarkup = heartSvg(color);
+          for (let i = 0; i < count; i++) {
+            const heart = document.createElement('div');
+            const size = 12 + Math.random() * 18;
+            const left = Math.random() * 100;
+            const duration = 10 + Math.random() * 8;
+            const delay = -Math.random() * duration;
+            const sway = 30 + Math.random() * 50;
+            const opacity = 0.5 + Math.random() * 0.4;
+            heart.style.cssText = `position:absolute;left:${left}vw;top:110vh;width:${size}px;height:${size}px;--of-peak-opacity:${opacity};filter:drop-shadow(0 0 4px ${color}77);animation:ofPageRise ${duration}s linear infinite, ofPageSway ${duration / 2.5}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            heart.innerHTML = svgMarkup;
+            root.appendChild(heart);
+          }
+        },
+      },
+
+      // ---------- STARS ---------- (twinkling, fixed positions)
+      stars: {
+        defaultColor: '#fff5b3',
+        build(root, color, count) {
+          for (let i = 0; i < count; i++) {
+            const star = document.createElement('div');
+            const size = 2 + Math.random() * 3;
+            const left = Math.random() * 100;
+            const top = Math.random() * 95;
+            const duration = 1.5 + Math.random() * 3;
+            const delay = -Math.random() * duration;
+            star.style.cssText = `position:absolute;left:${left}vw;top:${top}vh;width:${size}px;height:${size}px;border-radius:50%;background:${color};box-shadow:0 0 ${size * 2}px ${color};animation:ofPageTwinkle ${duration}s ease-in-out infinite;animation-delay:${delay}s;`;
+            root.appendChild(star);
+          }
+        },
+      },
+
+      // ---------- BATS ---------- (silhouettes flying horizontally)
+      bats: {
+        defaultColor: '#1a0033',
+        build(root, color, count) {
+          const batSvg = (col) => `<svg viewBox="0 0 32 18" xmlns="http://www.w3.org/2000/svg"><path d="M16 5 L13 2 L11 4 L8 2 L5 4 L2 5 L0 9 L4 8 L7 11 L11 9 L13 12 L16 10 L19 12 L21 9 L25 11 L28 8 L32 9 L30 5 L27 4 L24 2 L21 4 L19 2 Z" fill="${col}"/></svg>`;
+          const svgMarkup = batSvg(color);
+          for (let i = 0; i < count; i++) {
+            const bat = document.createElement('div');
+            const size = 24 + Math.random() * 18;
+            const top = 5 + Math.random() * 60;
+            const duration = 10 + Math.random() * 8;
+            const delay = -Math.random() * duration;
+            const dy = -8 + Math.random() * 16; // ± vertical drift across screen
+            const flapDuration = 0.25 + Math.random() * 0.2;
+            // Outer animates the horizontal+vertical sweep; inner animates the flap.
+            // We achieve "two transforms at once" by nesting: the outer translate is
+            // a separate element from the inner scaleY.
+            const inner = document.createElement('div');
+            inner.style.cssText = `width:${size}px;height:${size * 9 / 16}px;animation:ofPageBatFlap ${flapDuration}s ease-in-out infinite;`;
+            inner.innerHTML = svgMarkup;
+            bat.style.cssText = `position:absolute;left:0;top:${top}vh;animation:ofPageBatFly ${duration}s linear infinite;animation-delay:${delay}s;--of-bat-dy:${dy}vh;`;
+            bat.appendChild(inner);
+            root.appendChild(bat);
+          }
+        },
+      },
+
+      // ---------- CONFETTI ---------- (rectangular bits, multi-color)
+      confetti: {
+        defaultColor: '#ff4d4d',
+        build(root, color, count) {
+          for (let i = 0; i < count; i++) {
+            const piece = document.createElement('div');
+            const w = 4 + Math.random() * 6;
+            const h = 8 + Math.random() * 8;
+            const left = Math.random() * 100;
+            const duration = 5 + Math.random() * 6;
+            const delay = -Math.random() * duration;
+            const sway = 30 + Math.random() * 70;
+            // Vary hue by ±60deg for confetti-rainbow look around the chosen color
+            const hueShift = Math.round(-60 + Math.random() * 120);
+            piece.style.cssText = `position:absolute;left:${left}vw;top:-30px;width:${w}px;height:${h}px;background:${color};filter:hue-rotate(${hueShift}deg);animation:ofPageFall ${duration}s linear infinite, ofPageSway ${duration / 2.5}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            root.appendChild(piece);
+          }
+        },
+      },
+
+      // ---------- PETALS ---------- (cherry blossom / spring)
+      petals: {
+        defaultColor: '#ffb3d1',
+        build(root, color, count) {
+          const petalSvg = (col) => `<svg viewBox="0 0 16 24" xmlns="http://www.w3.org/2000/svg"><path d="M8 1 C 4 6, 2 14, 8 23 C 14 14, 12 6, 8 1 Z" fill="${col}" stroke="${col}" stroke-width="0.3" opacity="0.85"/></svg>`;
+          const svgMarkup = petalSvg(color);
+          for (let i = 0; i < count; i++) {
+            const petal = document.createElement('div');
+            const size = 12 + Math.random() * 12;
+            const left = Math.random() * 100;
+            const duration = 12 + Math.random() * 10;
+            const delay = -Math.random() * duration;
+            const sway = 80 + Math.random() * 100;
+            const opacity = 0.5 + Math.random() * 0.4;
+            petal.style.cssText = `position:absolute;left:${left}vw;top:-30px;width:${size}px;height:${size * 1.5}px;opacity:${opacity};filter:drop-shadow(0 1px 2px rgba(0,0,0,0.2));animation:ofPageDrift ${duration}s linear infinite, ofPageSway ${duration / 3}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            petal.innerHTML = svgMarkup;
+            root.appendChild(petal);
+          }
+        },
+      },
+
+      // ---------- EMBERS ---------- (rising glowing dots)
+      embers: {
+        defaultColor: '#ff7a1a',
+        build(root, color, count) {
+          for (let i = 0; i < count; i++) {
+            const ember = document.createElement('div');
+            const size = 2 + Math.random() * 4;
+            const left = Math.random() * 100;
+            const duration = 6 + Math.random() * 6;
+            const delay = -Math.random() * duration;
+            const sway = 20 + Math.random() * 40;
+            const opacity = 0.6 + Math.random() * 0.4;
+            ember.style.cssText = `position:absolute;left:${left}vw;top:110vh;width:${size}px;height:${size}px;border-radius:50%;background:${color};box-shadow:0 0 ${size * 3}px ${color}aa, 0 0 ${size * 6}px ${color}55;--of-peak-opacity:${opacity};animation:ofPageRise ${duration}s linear infinite, ofPageSway ${duration / 2}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            root.appendChild(ember);
+          }
+        },
+      },
+
+      // ---------- BUBBLES ---------- (rising spheres)
+      bubbles: {
+        defaultColor: '#a0d8ef',
+        build(root, color, count) {
+          for (let i = 0; i < count; i++) {
+            const bubble = document.createElement('div');
+            const size = 14 + Math.random() * 26;
+            const left = Math.random() * 100;
+            const duration = 9 + Math.random() * 8;
+            const delay = -Math.random() * duration;
+            const sway = 25 + Math.random() * 50;
+            const opacity = 0.3 + Math.random() * 0.4;
+            bubble.style.cssText = `position:absolute;left:${left}vw;top:110vh;width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 30% 30%, ${color}cc, ${color}55 70%, ${color}11 100%);border:1px solid ${color}88;--of-peak-opacity:${opacity};animation:ofPageRise ${duration}s linear infinite, ofPageSway ${duration / 2.5}s ease-in-out infinite alternate;animation-delay:${delay}s, ${delay}s;--of-sway:${sway}px;`;
+            root.appendChild(bubble);
+          }
+        },
+      },
+
+      // ---------- RAIN ---------- (vertical streaks)
+      rain: {
+        defaultColor: '#a8c5e0',
+        build(root, color, count) {
+          for (let i = 0; i < count; i++) {
+            const drop = document.createElement('div');
+            const left = Math.random() * 100;
+            const len = 12 + Math.random() * 20;
+            const duration = 0.5 + Math.random() * 0.7;
+            const delay = -Math.random() * duration;
+            const opacity = 0.25 + Math.random() * 0.45;
+            drop.style.cssText = `position:absolute;left:${left}vw;top:0;width:1px;height:${len}px;background:linear-gradient(to bottom, ${color}00, ${color});opacity:${opacity};animation:ofPageRain ${duration}s linear infinite;animation-delay:${delay}s;`;
+            root.appendChild(drop);
+          }
+        },
+      },
+    };
+
+    // ============================================================
+    // ENGINE — applyEffect drives the whole thing.
+    // ============================================================
+    function buildLayer() {
+      ensureStyle();
+      const el = document.createElement('div');
+      el.id = 'of-page-effects';
+      el.setAttribute('aria-hidden', 'true');
+      el.style.cssText = `position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:9990;overflow:hidden;`;
+      return el;
+    }
+
+    function teardown() {
+      if (layer) { layer.remove(); layer = null; }
+    }
+
+    // Public-ish API. The visual-config poll calls this every 5s; if the
+    // tuple (name, color, intensity) hasn't changed, we no-op.
+    function applyEffect(rawName, rawColor, rawIntensity) {
+      const name = String(rawName || 'none').toLowerCase();
+      const intensity = (rawIntensity === 'subtle' || rawIntensity === 'heavy') ? rawIntensity : 'medium';
+      const color = (rawColor && String(rawColor).trim()) || '';
+
+      // Skip rebuild if nothing changed since last apply
+      if (last.name === name && last.color === color && last.intensity === intensity) return;
+      last = { name, color, intensity };
+
+      teardown();
+      const def = EFFECTS[name];
+      if (!def) return; // 'none' or unknown — leave the page bare
+
+      const effectiveColor = color || def.defaultColor;
+      const count = pickCount(name, intensity);
+      if (count <= 0) return;
+
+      layer = buildLayer();
+      try {
+        def.build(layer, effectiveColor, count);
+        document.body.appendChild(layer);
+      } catch (err) {
+        // Effect crashed — fail silent, leave page clean
+        teardown();
       }
-      document.body.appendChild(snowLayer);
     }
 
-    function stopSnow() {
-      if (!snowLayer) return;
-      snowLayer.remove();
-      snowLayer = null;
-    }
-
-    // Apply server-provided state
-    function applySnowState(enabled) {
-      if (enabled) startSnow();
-      else stopSnow();
-    }
-
-    // Apply initial state from bootstrap (no flicker on first load if enabled)
+    // Apply initial state from the bootstrap blob, with backward-compat
+    // for the old pageSnowEnabled boolean (an older server / older template
+    // bundle might still set it but not the new keys).
     const bootstrap = window.__SHOWPILOT__ || {};
-    applySnowState(bootstrap.pageSnowEnabled);
+    const initialName = bootstrap.pageEffect != null
+      ? bootstrap.pageEffect
+      : (bootstrap.pageSnowEnabled ? 'snow' : 'none');
+    applyEffect(initialName, bootstrap.pageEffectColor || '', bootstrap.pageEffectIntensity || 'medium');
 
-    // Expose so the unified visual-config poll (below) can drive snow updates
-    window._ofApplySnowState = applySnowState;
+    // Expose so the unified visual-config poll (below) can drive updates
+    window._ofApplyEffect = applyEffect;
+    // Backward-compat shim: any caller still toggling _ofApplySnowState
+    // gets routed through the new engine. Older RF-style templates might
+    // poke this; preserving it is cheap.
+    window._ofApplySnowState = function (enabled) {
+      applyEffect(enabled ? 'snow' : 'none', '', 'medium');
+    };
   })();
 
   // ============================================================
@@ -474,10 +1656,26 @@
         const r = await fetch('/api/visual-config?gateCheck=mode', { credentials: 'include' });
         if (r.ok) {
           const data = await r.json();
-          if (typeof window._ofApplySnowState === 'function') {
+          if (typeof window._ofApplyEffect === 'function') {
+            // New three-knob API. Server sends pageEffect/Color/Intensity.
+            // Falls back to legacy pageSnowEnabled boolean if the server
+            // is older and only sends that.
+            const name = data.pageEffect != null
+              ? data.pageEffect
+              : (data.pageSnowEnabled ? 'snow' : 'none');
+            window._ofApplyEffect(name, data.pageEffectColor || '', data.pageEffectIntensity || 'medium');
+          } else if (typeof window._ofApplySnowState === 'function') {
+            // Pre-engine viewer (e.g. an older rf-compat.js on a stale tab) — keep working.
             window._ofApplySnowState(!!data.pageSnowEnabled);
           }
           applyAudioGateState(!!data.audioGateBlocked, data.audioGateReason || '');
+          // Show-not-playing is a SEPARATE, non-sticky signal from the audio
+          // gate. The launcher button stays visible (so viewers can still
+          // tap it) but the player panel content swaps to a "Show isn't
+          // playing right now" message. Toggles freely as FPP starts/stops.
+          if (typeof window._ofApplyShowNotPlaying === 'function') {
+            window._ofApplyShowNotPlaying(!!data.showNotPlaying);
+          }
         }
       } catch {}
     }
@@ -714,22 +1912,92 @@
 
   (function initListenOnPhone() {
     // ---- Floating launcher button ----
+    //
+    // Customizable per admin Settings → Viewer Page → Listen Button:
+    //   - launcherIconSource: 'default' | 'preset:<key>' | 'custom'
+    //   - launcherIconData: base64 data URL when source='custom'
+    //   - launcherShowChrome: round red button background visible
+    //   - launcherSize: 'small' | 'medium' | 'large' (40 / 52 / 72 px)
+    //
+    // Presets are inline SVGs (compact, scale cleanly, no extra requests).
+    // Sized to the button via 100% width/height; SVGs use currentColor so
+    // they pick up the button's text color when chrome is enabled.
+
+    const LAUNCHER_PRESETS = {
+      headphones: '<svg viewBox="0 0 24 24" fill="currentColor" width="60%" height="60%" style="display:block;"><path d="M12 3a9 9 0 0 0-9 9v6a3 3 0 0 0 3 3h2v-8H5v-1a7 7 0 1 1 14 0v1h-3v8h2a3 3 0 0 0 3-3v-6a9 9 0 0 0-9-9z"/></svg>',
+      tree: '<svg viewBox="0 0 24 24" fill="currentColor" width="65%" height="65%" style="display:block;"><path d="M12 2L7 9h3l-4 6h3l-5 7h16l-5-7h3l-4-6h3l-5-7zm-1 19h2v2h-2v-2z"/></svg>',
+      pumpkin: '<svg viewBox="0 0 24 24" fill="currentColor" width="62%" height="62%" style="display:block;"><path d="M12 4c-.7 0-1.3.3-1.7.8A2.5 2.5 0 0 0 8 5C5 5 3 8 3 12s2 7 5 7c.6 0 1.2-.1 1.7-.4.7.5 1.5.8 2.3.8s1.6-.3 2.3-.8c.5.3 1.1.4 1.7.4 3 0 5-3 5-7s-2-7-5-7c-.8 0-1.6.3-2.3.8C12.6 4.3 12.3 4 12 4zm-3 7l1.5 2L9 15l-1.5-2L9 11zm6 0l1.5 2L15 15l-1.5-2L15 11zm-5 4h4l-1 2h-2l-1-2z"/></svg>',
+      ghost: '<svg viewBox="0 0 24 24" fill="currentColor" width="62%" height="62%" style="display:block;"><path d="M12 2a8 8 0 0 0-8 8v12l2.5-2 2.5 2 2.5-2 2.5 2 2.5-2 2.5 2v-12a8 8 0 0 0-8-8zm-3 7a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm6 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>',
+      snowflake: '<svg viewBox="0 0 24 24" fill="currentColor" width="65%" height="65%" style="display:block;"><path d="M12 2v3.5l2-1.5 1 1.3-3 2.2v3l2.6-1.5.5-3.6 1.7.2-.3 2.4 3-1.7.9 1.5-3 1.7 2.2.9-.7 1.6-3-1.2L17 12l2.2 1.2 3-1.2.7 1.6-2.2.9 3 1.7-.9 1.5-3-1.7.3 2.4-1.7.2-.5-3.6-2.6-1.5v3l3 2.2-1 1.3-2-1.5V22h-2v-3.5l-2 1.5-1-1.3 3-2.2v-3l-2.6 1.5-.5 3.6-1.7-.2.3-2.4-3 1.7-.9-1.5 3-1.7L4.6 13l.7-1.6 3 1.2L7 12l-2.2-1.2-3 1.2-.7-1.6 2.2-.9-3-1.7.9-1.5 3 1.7-.3-2.4 1.7-.2.5 3.6L9 9.5v-3L6 4.3l1-1.3 2 1.5V2h3z" transform="scale(0.85) translate(2.1,2.1)"/></svg>',
+      music: '<svg viewBox="0 0 24 24" fill="currentColor" width="60%" height="60%" style="display:block;"><path d="M19.952 1.651a.75.75 0 01.298.599V16.303a3 3 0 01-2.176 2.884l-1.32.377a2.553 2.553 0 11-1.403-4.909l2.311-.66a1.5 1.5 0 001.088-1.442V6.994l-9 2.572v9.737a3 3 0 01-2.176 2.884l-1.32.377a2.553 2.553 0 11-1.402-4.909l2.31-.66a1.5 1.5 0 001.088-1.442V5.25a.75.75 0 01.544-.721l10.5-3a.75.75 0 01.658.122z"/></svg>',
+      heart: '<svg viewBox="0 0 24 24" fill="currentColor" width="60%" height="60%" style="display:block;"><path d="M12 21s-7-4.5-9.5-9.5C1 8 3 4 7 4c2 0 3.5 1 5 3 1.5-2 3-3 5-3 4 0 6 4 4.5 7.5C19 16.5 12 21 12 21z"/></svg>',
+      shamrock: '<svg viewBox="0 0 24 24" fill="currentColor" width="62%" height="62%" style="display:block;"><path d="M12 11c-1.5-3-4.5-3-5.5-1.5S6 13 9 14c-2.5 1-3 4-1.5 5s4 .5 5-2c0 3 2 5 4 5s4-2 4-5c1 2.5 3.5 3 5 2s1-4-1.5-5c3-1 4-3.5 2.5-4.5S14 8 12.5 11l-.5-9-.5 9z" transform="translate(0,1)"/></svg>',
+      star: '<svg viewBox="0 0 24 24" fill="currentColor" width="62%" height="62%" style="display:block;"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7l3-7z"/></svg>',
+    };
+
+    // Resolve config to concrete style values.
+    const SIZES = { small: 40, medium: 52, large: 72 };
+    const launcherPx = SIZES[boot.launcherSize] || SIZES.medium;
+    const showChrome = boot.launcherShowChrome !== false;
+    const iconSource = boot.launcherIconSource || 'default';
+
+    // Build the icon HTML based on source. If a custom image fails to load,
+    // we fall back to the default emoji visually (broken-image alt would
+    // look bad as a launcher). Image fills more of the button when chrome
+    // is off (no border to compete with) and leaves padding when chrome is
+    // on so the icon doesn't crowd the red ring.
+    const iconSizePct = showChrome ? 75 : 100;
+    let iconHtml;
+    if (iconSource === 'custom' && boot.launcherIconData) {
+      iconHtml =
+        '<img src="' + boot.launcherIconData + '" alt="" ' +
+        'style="width:' + iconSizePct + '%;height:' + iconSizePct + '%;' +
+        'object-fit:contain;display:block;" ' +
+        'onerror="this.outerHTML=\'\\u{1F3A7}\';" />';
+    } else if (iconSource && iconSource.indexOf('preset:') === 0) {
+      const key = iconSource.slice(7);
+      iconHtml = LAUNCHER_PRESETS[key] || '🎧';
+    } else {
+      iconHtml = '🎧';
+    }
+
     const btn = document.createElement('button');
     btn.id = 'of-listen-btn';
     btn.setAttribute('aria-label', 'Listen on phone');
     btn.title = 'Listen on phone';
-    btn.innerHTML = '🎧';
+    btn.innerHTML = iconHtml;
+
+    // Chrome ON — original red round button with image/SVG inside.
+    // Chrome OFF — bare image: no background, no border, no shadow. The
+    // image itself is the affordance. We still keep cursor:pointer and a
+    // subtle drop-shadow so it reads as tappable on light backgrounds.
+    const chromeStyles = showChrome
+      ? `background: rgba(220,38,38,0.95); color: white;
+         border: 2px solid rgba(255,255,255,0.4);
+         box-shadow: 0 4px 12px rgba(0,0,0,0.4);`
+      : `background: transparent; color: white;
+         border: 0;
+         filter: drop-shadow(0 2px 6px rgba(0,0,0,0.45));`;
+
     btn.style.cssText = `
       position: fixed; bottom: 16px; right: 16px; z-index: 9998;
-      width: 52px; height: 52px; border-radius: 50%;
-      background: rgba(220,38,38,0.95); color: white;
-      border: 2px solid rgba(255,255,255,0.4);
-      font-size: 24px; cursor: pointer;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      width: ${launcherPx}px; height: ${launcherPx}px; border-radius: 50%;
+      ${chromeStyles}
+      font-size: ${Math.round(launcherPx * 0.46)}px; cursor: pointer;
       transition: transform 0.15s, background 0.15s, opacity 0.2s;
       padding: 0; line-height: 1;
       display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
     `;
+    // If audio is disabled at the show level, force the button hidden.
+    // Distinct from the audio-gate-pending class (which can be lifted
+    // when location verifies) — this one stays hidden until admin
+    // re-enables audio and the viewer reloads. We still build the rest
+    // of the player so we don't have to add null-checks all through the
+    // initialization code; it just stays out of view.
+    if (!boot.audioEnabled) {
+      btn.style.display = 'none';
+    }
     // If audio gate is enabled, hide the button initially via CSS class
     // (with !important so other state changes like setMode('closed') can't
     // accidentally reveal it). The button is only revealed once the visual-config
@@ -973,6 +2241,97 @@
     const closeBtn = panel.querySelector('#of-listen-close');
     const pillText = minimizedPill.querySelector('#of-listen-pill-text');
 
+    // ============================================================
+    // SHOW-NOT-PLAYING STATE
+    //
+    // When the server reports that FPP isn't actively playing a sequence
+    // (e.g. show is between songs, FPP stopped, plugin stale), we swap
+    // the player into a stripped-down "Show isn't playing right now"
+    // message instead of hiding the launcher. Per Will's spec: viewers
+    // should NOT have to refresh to get the player back when the show
+    // resumes — so the launcher stays available, and this state toggles
+    // freely as FPP starts/stops.
+    //
+    // Stripped state hides: cover art, title/artist/status block, play,
+    // mute, and minimize buttons. Shows: a centered message and the
+    // close (×) button. Restoring un-hides everything.
+    // ============================================================
+
+    // Locate the inner column that holds title/artist/status — it's the
+    // sibling of coverEl with no ID. Cache it so we don't re-query.
+    const textCol = coverEl.nextElementSibling;
+
+    // Inject the "not playing" message element. Hidden by default; lives
+    // in the same flex row as the cover so it can take its place when
+    // we hide the cover/text/buttons.
+    const notPlayingMsg = document.createElement('div');
+    notPlayingMsg.id = 'of-listen-not-playing';
+    notPlayingMsg.style.cssText = `
+      flex: 1; min-width: 0;
+      text-align: center;
+      font-size: 15px; font-weight: 500;
+      color: rgba(255,255,255,0.92);
+      padding: 4px 8px;
+      display: none;
+    `;
+    notPlayingMsg.textContent = "Show isn't playing right now";
+    // Insert before the close button so the close stays at the right edge.
+    closeBtn.parentElement.insertBefore(notPlayingMsg, closeBtn);
+
+    let _showNotPlaying = false;
+
+    function applyShowNotPlaying(notPlaying) {
+      // No-op if state hasn't changed — avoids redundant DOM thrash on
+      // every 5s poll.
+      if (notPlaying === _showNotPlaying) return;
+      _showNotPlaying = notPlaying;
+
+      if (notPlaying) {
+        // Hide the hidden minimized pill if it was visible — a "Playing"
+        // indicator while nothing is playing would be confusing.
+        minimizedPill.style.display = 'none';
+
+        // Stop any in-flight audio so we're not pumping silence (or worse,
+        // stale buffer tails) through the speakers while showing "not
+        // playing." Don't tear down audioCtx — recreating it later requires
+        // a user gesture on iOS, which would break the resume-on-restart
+        // flow.
+        try { stopAudio(); } catch {}
+
+        // Hide the player content. notPlayingMsg has flex:1 so it takes
+        // the textCol's place. Close (×) stays visible.
+        coverEl.style.display = 'none';
+        if (textCol) textCol.style.display = 'none';
+        playBtn.style.display = 'none';
+        muteBtn.style.display = 'none';
+        minBtn.style.display = 'none';
+        notPlayingMsg.style.display = 'block';
+      } else {
+        notPlayingMsg.style.display = 'none';
+        coverEl.style.display = '';
+        if (textCol) textCol.style.display = '';
+        playBtn.style.display = '';
+        muteBtn.style.display = '';
+        minBtn.style.display = '';
+        // If the user has the panel open when the show resumes, get audio
+        // going. If audioCtx already exists (panel was opened during a
+        // prior playing window), a syncOnce() picks up the new track.
+        // If not (panel was opened in the not-playing state), we need a
+        // full startup() — but Web Audio init requires a user gesture on
+        // iOS, so this will only succeed if the user interacted recently.
+        // Acceptable: if startup fails silently, the panel still shows the
+        // (now-empty) controls and they can tap play to retry.
+        if (panelMode === 'open') {
+          if (audioCtx) {
+            try { syncOnce(); } catch {}
+          } else {
+            try { startup(); } catch {}
+          }
+        }
+      }
+    }
+    window._ofApplyShowNotPlaying = applyShowNotPlaying;
+
     // Apply marquee scroll if text overflows the wrapper. Called after any
     // title/artist text update. Adds 24px padding on the "scrolled-to" position
     // so the user can see the full text comfortably. Speed scales with overflow:
@@ -1031,6 +2390,49 @@
     let clockOffset = 0;          // serverNow - clientNow at last sync
     let trackStartedAtMs = 0;     // when this track started on server (server epoch)
     let trackDuration = 0;        // total length in seconds
+    let audioSyncOffsetMs = 0;    // per-show offset to compensate for FPP audio output latency vs cache delivery speed. Server sends this; positive = audio plays LATER (compensates for too-early arrival)
+
+    // The HTML5 <audio> element used for playback. We use HTML5 audio
+    // (rather than Web Audio API) because it provides much better
+    // multi-phone sync — see comments in handleTrackChange. Reset to
+    // null after stopAudio.
+    let htmlAudio = null;
+
+    // Post-startup correction state (v0.27.0).
+    // The browser's `.play()` call has non-deterministic startup latency
+    // — even on the same hardware between sessions, between 0 and 200ms
+    // can elapse between calling .play() and the speakers actually
+    // producing sound. Predicting this latency is hopeless. Measuring it
+    // after the fact is straightforward.
+    //
+    // pendingPostStartCorrectionAtMs is the wall-clock time at which we
+    // should perform a one-shot measurement of htmlAudio.currentTime
+    // against the expected position from FPP and seek-correct any error.
+    // Set when we call .play() for a new track; cleared once the
+    // correction fires or the track ends.
+    //
+    // 1.0s after play start gives the audio element time to settle into
+    // steady-state playback (initial buffer/decoder warmup is over) so
+    // the measurement reflects real per-device startup error rather than
+    // transient warmup wobble.
+    let pendingPostStartCorrectionAtMs = 0;
+
+    // Live position from FPP. When the plugin is running >= 0.11.0, it
+    // pushes "FPP is at position X.Y as of timestamp T" updates every
+    // ~500ms via socket.io. We use this as the authoritative anchor for
+    // playback sync — it reflects FPP's actual hardware audio output
+    // position, including buffer delay, so phones aligning to it
+    // naturally match what the speakers are emitting.
+    //
+    // This replaces extrapolating from trackStartedAtMs, which has
+    // whatever bias was baked in at track-change time and stays put
+    // for the whole track regardless of how FPP's actual playback
+    // progresses. Live position is fresh by definition.
+    //
+    // Shape: { sequence, position, updatedAt } or null if no update yet.
+    // The viewer subscribes to 'positionUpdate' socket events to keep
+    // this fresh; initial value comes from now-playing-audio response.
+    let livePosition = null;
     let lastSyncResponse = null;  // raw response for debugging
     let pollTimer = null;
     let driftTimer = null;
@@ -1072,6 +2474,62 @@
     let trackScheduledOutputLatency = 0;
     let pendingStartTimeout = null;
 
+    // ---- Auto-sync state ----
+    // We continuously adjust playbackRate based on smoothed drift. The
+    // server's audio_sync_offset_ms acts as a constant target (a "bias")
+    // and continuous resync corrects against it. Earlier versions tried
+    // a "converge once then lock at 1.0" approach but it failed when
+    // drift fluctuated mid-track (variable FPP audio output latency,
+    // network jitter affecting clock sync, etc.) — once we locked at
+    // 1.0, we wouldn't catch drift that developed later. This version
+    // never stops adjusting.
+    //
+    // Key smoothing: we keep a rolling window of recent drift samples
+    // and act on the AVERAGE, not the instantaneous reading. Without
+    // this, normal jitter (±50–100ms tick to tick) would cause the rate
+    // to constantly oscillate, producing audible warbling. Averaging
+    // 5 samples (~1.25s at 250ms tick) absorbs most jitter while still
+    // reacting to real trends.
+    let lastAppliedRate = 1.0;
+    const driftHistory = [];          // ring of recent drift values in seconds
+    const DRIFT_HISTORY_SIZE = 5;     // ~1.25 seconds of samples
+
+    // Integrated playback position. We need to track this separately from
+    // (audioCtx.currentTime - trackScheduledAtAudioCtx) because the audio
+    // context's clock advances at real time regardless of playbackRate.
+    // When we set rate=0.98, real time advances at 1.0 but the audio file
+    // position advances at 0.98. Without integrating rate over time, the
+    // drift calculation diverges from reality whenever rate isn't 1.0,
+    // which is exactly when we need it to be accurate.
+    //
+    // Each drift tick we add (real_dt * current_rate) to this counter.
+    // It represents "how many seconds INTO THE FILE we have actually
+    // played back since the track was scheduled."
+    let integratedPlayedSec = 0;
+    let lastIntegrationTime = 0;      // audioCtx.currentTime at last integration tick
+
+    // Crossfade correction state. We use jump-cut + crossfade rather than
+    // continuous rate adjustment because rate adjustment introduces
+    // accumulated math errors over time and produces audible pitch shifts.
+    // PulseMesh and other multi-room audio systems use this pattern.
+    //
+    // The plan: when drift exceeds threshold, fade out the current source
+    // over a short window while a new source starts at the corrected
+    // position with a fade-in. The crossfade is brief enough (~40ms) that
+    // listeners don't perceive it as a discontinuity, but the position
+    // snaps to truth instantly. No oscillation, no math errors.
+    //
+    // We hold the per-source GainNode so we can ramp ITS volume during
+    // the crossfade — the main `gainNode` at the destination handles
+    // user mute/volume and stays untouched by sync operations.
+    let currentSourceGain = null;
+    // Throttle: don't crossfade more than once per N seconds. Without
+    // this, jitter near the threshold would trigger correction on every
+    // tick, which would just produce an ugly chain of crossfades.
+    let lastCrossfadeAtCtx = 0;
+    // Same idea but for HTML5 re-seek correction (in wall-clock ms).
+    let lastReseekAtMs = 0;
+
     // ---- UI handlers ----
     // When the audio distance gate is enabled (admin opt-in), tapping the
     // launcher triggers a fresh location verification before the player
@@ -1083,6 +2541,14 @@
     // permission prompts, no GPS. Showrunners playing original or licensed
     // content shouldn't have to ask viewers for location just to listen.
     btn.onclick = async () => {
+      // If the show isn't currently playing, there's no audio to gate on.
+      // Skip the location prompt entirely — just open the panel so the
+      // user sees the "Show isn't playing" message. We'll ask for location
+      // when it actually matters (when they tap to listen to real audio).
+      if (_showNotPlaying) {
+        setMode('open');
+        return;
+      }
       if (!boot.audioGateEnabled) {
         setMode('open');
         return;
@@ -1106,20 +2572,28 @@
     closeBtn.onclick = () => setMode('closed');
     minimizedPill.onclick = () => setMode('open');
     playBtn.onclick = () => {
-      if (currentSource) {
-        // Stop and re-sync from current position
+      // With HTML5 audio, the playBtn acts as a stop/restart toggle.
+      // Stop: clear out the audio element so the user can re-sync.
+      // Restart: kick a syncOnce() which triggers handleTrackChange with
+      // fresh data, and that builds a new <audio> element seeked to the
+      // current expected position.
+      if (htmlAudio && !htmlAudio.paused) {
         stopAudio();
         statusEl.textContent = 'Resuming…';
         setPlayIcon(false);
-        // Re-sync will start it back up
         syncOnce();
-      } else if (currentBuffer) {
-        // Was paused — restart with current sync
-        scheduleStart();
+      } else {
+        // Either nothing playing yet, or audio is paused. Either way,
+        // a fresh sync will rebuild and seek correctly.
+        syncOnce();
       }
     };
     muteBtn.onclick = () => {
       isMuted = !isMuted;
+      // Apply to HTML5 audio element (the active playback path).
+      if (htmlAudio) htmlAudio.muted = isMuted;
+      // Also toggle the Web Audio gain node for any legacy code paths
+      // that might still produce sound through it.
       if (gainNode) gainNode.gain.value = isMuted ? 0 : 1;
       muteBtn.style.color = isMuted ? '#ef4444' : 'rgba(255,255,255,0.75)';
       setMuteIcon(isMuted);
@@ -1144,7 +2618,12 @@
         // Force reflow then transition in
         void panel.offsetHeight;
         panel.style.transform = 'translateY(0)';
-        if (!audioCtx) startup();
+        // Skip audio init when the show isn't playing — there's nothing
+        // to sync to, and starting audio + running the gate check would
+        // cause syncOnce() to flip the gate latch and immediately hide
+        // the panel we just opened. The applyShowNotPlaying transition
+        // back to false will call startup() when the show resumes.
+        if (!audioCtx && !_showNotPlaying) startup();
       } else if (mode === 'minimized') {
         panel.style.transform = 'translateY(100%)';
         setTimeout(() => { panel.style.display = 'none'; }, 250);
@@ -1162,12 +2641,46 @@
         gainNode.gain.value = isMuted ? 0 : 1;
         gainNode.connect(audioCtx.destination);
         statusEl.textContent = 'Loading…';
+        // Establish accurate clock offset BEFORE first sync poll. The first
+        // poll's track-start timestamp uses clockOffset to compute initial
+        // playback position; if clockOffset is wrong by 200ms here, every
+        // viewer joining at the same time gets a different bias, and they
+        // drift apart from each other. Burst sync up front prevents that.
+        await syncClockBurst(5);
         await syncOnce();
         // Re-sync periodically — once per second is enough since track-start
         // anchoring means we don't need continuous position updates.
         pollTimer = setInterval(syncOnce, 1000);
         // Drift correction loop (cheap — just compares client clock to expected)
         driftTimer = setInterval(updateDriftDisplay, 250);
+        // Refresh clock offset every 30s with a short burst. Clock drift on
+        // most devices is a few ms/minute, but phones waking from sleep or
+        // switching networks can suddenly jump by a lot. Cheap to keep
+        // current rather than discover staleness when sync goes off.
+        setInterval(() => syncClockBurst(3), 30000);
+
+        // Subscribe to live position updates from the server. The plugin
+        // pushes "FPP is at position X.Y" via /api/plugin/position; the
+        // server relays as a socket.io 'positionUpdate' event. We update
+        // our anchor each time, giving us near-real-time speaker-accurate
+        // sync without polling overhead. socket.io is shared with the
+        // outer (queue/voting) scope; window.io() returns a singleton.
+        try {
+          if (window.io) {
+            const audioSock = window.io();
+            audioSock.on('positionUpdate', (msg) => {
+              if (!msg || !msg.sequence) return;
+              if (currentSequence && msg.sequence !== currentSequence) return;
+              livePosition = {
+                sequence: msg.sequence,
+                position: msg.position,
+                updatedAt: msg.updatedAt,
+              };
+            });
+          }
+        } catch (e) {
+          console.warn('[ShowPilot] could not subscribe to position updates:', e);
+        }
 
         // ============================================================
         // Audio gate — continuous proximity enforcement (v0.18.15+)
@@ -1392,9 +2905,83 @@
       currentMediaName = null;
     }
 
-    // ---- Sync poll ----
+    // ---- NTP-style clock sync (burst pings) ----
+    //
+    // Establishes accurate clock offset between this client and the server.
+    // Without accurate sync, two phones aligning to "FPP position + elapsed
+    // since update" will drift apart because each computes elapsed using
+    // its own (skewed) Date.now(). The single-sample offset embedded in
+    // now-playing-audio polls has 50-200ms of jitter from network variance;
+    // burst sync improves this to ~10-20ms by:
+    //   1. Firing N parallel pings to /api/time
+    //   2. Recording (t_send_local, t_recv_local, t_server) for each
+    //   3. Computing offset = t_server + rtt/2 - t_recv_local
+    //   4. Discarding outlier RTTs (sort by rtt, keep best half)
+    //   5. Averaging the offsets from the kept samples
+    //
+    // The "discard outliers" step is key — a single bad ping (network
+    // hiccup, GC pause, etc.) would skew an unfiltered average by tens
+    // of ms. PulseMesh's implementation does similar burst+filter logic
+    // on a dedicated WebSocket; we use HTTP since we're not building a
+    // separate connection just for this.
+    let lastClockSyncAt = 0;
+    async function syncClockBurst(burstSize = 5) {
+      const samples = [];
+      // Fire requests in PARALLEL — sequential would just sample at the
+      // same network condition each time. Parallel exposes the variance
+      // so outlier filtering can do its job.
+      const promises = [];
+      for (let i = 0; i < burstSize; i++) {
+        promises.push((async () => {
+          const t0 = Date.now();
+          try {
+            const r = await fetch('/api/time', { credentials: 'include', cache: 'no-store' });
+            const t1 = Date.now();
+            const data = await r.json();
+            if (typeof data.t === 'number') {
+              const rtt = t1 - t0;
+              const oneWay = rtt / 2;
+              const offset = data.t + oneWay - t1;
+              samples.push({ rtt, offset });
+            }
+          } catch (e) {
+            // Silently drop failed pings — we just have fewer samples.
+          }
+        })());
+      }
+      await Promise.all(promises);
+
+      if (samples.length === 0) return; // bail if all failed
+      // Sort by RTT ascending — lowest RTT samples have tightest one-way
+      // latency estimate (network was quiet, less asymmetry to worry about).
+      samples.sort((a, b) => a.rtt - b.rtt);
+      // Keep the best half (or all if we have <4 samples).
+      const keep = samples.length >= 4 ? samples.slice(0, Math.ceil(samples.length / 2)) : samples;
+      // Use the MEDIAN offset from the kept samples, not the mean (v0.28.2).
+      // On cellular networks, even after RTT-based outlier filtering, a
+      // single sample can still be biased by event-loop lag or momentary
+      // scheduling glitches on either end. Mean is sensitive to that one
+      // bad sample; median ignores it. With 2-3 kept samples the median
+      // and mean usually agree within a few ms; the win is when one of
+      // the "best" samples is still a lemon.
+      const offsets = keep.map(s => s.offset).sort((a, b) => a - b);
+      const mid = Math.floor(offsets.length / 2);
+      const medianOffset = offsets.length % 2 === 1
+        ? offsets[mid]
+        : (offsets[mid - 1] + offsets[mid]) / 2;
+
+      clockOffset = medianOffset;
+      lastClockSyncAt = Date.now();
+    }
+
     async function syncOnce() {
       try {
+        // Master audio kill-switch — admin disabled audio for this show.
+        // No point polling /api/now-playing-audio: the server returns
+        // {audioDisabled:true} and there's no launcher to drive anyway.
+        // Bail to keep the network quiet on every viewer's tab.
+        if (!boot.audioEnabled) return;
+
         // If the gate is latched (panel hidden, user kicked out for any
         // reason), don't keep polling for audio. The cached location may
         // be stale, audio might try to restart invisibly into a hidden
@@ -1432,9 +3019,15 @@
 
         lastSyncResponse = data;
 
-        // Clock offset: account for half the round-trip as one-way latency
-        const oneWayLatency = (reqEnd - reqStart) / 2;
-        clockOffset = data.serverNowMs - reqEnd + oneWayLatency;
+        // Update clock offset only if we haven't done a burst sync yet.
+        // Burst sync (syncClockBurst) is much more accurate; once it's
+        // run we leave clockOffset alone except for periodic refreshes.
+        // This prevents the single-sample latency-jittered estimate from
+        // overwriting our good measurement on every poll.
+        if (lastClockSyncAt === 0) {
+          const oneWayLatency = (reqEnd - reqStart) / 2;
+          clockOffset = data.serverNowMs - reqEnd + oneWayLatency;
+        }
 
         // Apply decoration theme (cheap — only does work if it changed)
         applyDecoration(data.playerDecoration, data.playerDecorationAnimated, data.playerCustomColor);
@@ -1446,6 +3039,14 @@
           // Same track — just update timing anchor in case server has new info
           if (data.trackStartedAtMs) trackStartedAtMs = data.trackStartedAtMs;
           if (data.durationSec) trackDuration = data.durationSec;
+          if (typeof data.audioSyncOffsetMs === 'number') audioSyncOffsetMs = data.audioSyncOffsetMs;
+          // Refresh live position from response — covers the case where
+          // the socket connection is down or hasn't pushed an update
+          // since this poll arrived. Only accept if it matches our
+          // current sequence (defensive against race-condition stale data).
+          if (data.livePosition && data.livePosition.sequence === currentSequence) {
+            livePosition = data.livePosition;
+          }
           // Refresh metadata in case admin changed it
           if (data.imageUrl && coverEl.src !== data.imageUrl) coverEl.src = data.imageUrl;
 
@@ -1465,6 +3066,9 @@
       currentMediaName = data.sequenceName;
       trackStartedAtMs = data.trackStartedAtMs || (Date.now() + clockOffset - (data.elapsedSec * 1000));
       trackDuration = data.durationSec || 0;
+      if (typeof data.audioSyncOffsetMs === 'number') audioSyncOffsetMs = data.audioSyncOffsetMs;
+      livePosition = (data.livePosition && data.livePosition.sequence === data.sequenceName)
+        ? data.livePosition : null;
 
       titleEl.textContent = data.displayName || data.sequenceName;
       artistEl.textContent = data.artist || '';
@@ -1477,38 +3081,139 @@
 
       stopAudio();
 
-      // ---- Pick stream URL ----
-      // Audio is served exclusively by the ShowPilot proxy, which fetches
-      // bytes from FPP's built-in /api/file/Music/<n> endpoint. There's no
-      // separate "direct" path anymore — we previously had a Node.js audio
-      // daemon running on FPP that this client raced against the proxy, but
-      // it added complexity for a benefit that turned out to be imperceptible
-      // (the proxy adds a few ms over LAN, undetectable in practice).
-      //
-      // We try the same-origin proxy URL first, fall back to the public URL
-      // (absolute, via configured public domain). This handles cases where
-      // the page was loaded from a cached HTML and the origin is briefly
-      // unreachable but the public domain is still up.
-      const urlsToTry = [];
-      if (data.streamUrl) urlsToTry.push(window.location.origin + data.streamUrl);
-      if (data.publicStreamUrl) urlsToTry.push(data.publicStreamUrl);
+      // ---- HTML5 audio playback (v0.22.0+) ----
+      // We switched away from Web Audio API (decodeAudioData + BufferSource)
+      // because it pushed all timing burden onto each phone independently:
+      // each phone bought its own audio clock, computed its own playback
+      // position, and applied its own corrections — leading to phones
+      // drifting from each OTHER even when each one was correctly synced
+      // to FPP. HTML5 <audio src=...> hands timing to the browser, which
+      // plays back at native 1.0x rate from a Range-seeked start point.
+      // Two phones fetching the same source file at the same wall-clock
+      // moment, seeked to the same position, drift apart only by their
+      // network latency variance (a few tens of ms on LAN) — far better
+      // than the multi-hundred-ms drift we saw with Web Audio scheduling.
+      // Try the live relay first — one FPP connection fanned to all listeners
+      // gives automatic sync without offset math. If the relay isn't active
+      // (between songs, not yet started, 503 response), fall through to the
+      // cache/proxy path which handles late joiners and external listeners.
+      let useRelay = false;
+      if (data.relayUrl) {
+        try {
+          const probe = await fetch(window.location.origin + data.relayUrl, {
+            method: 'HEAD',
+            credentials: 'include',
+            signal: AbortSignal.timeout(1500),
+          });
+          // 200 means relay is live; anything else (503 = not active) means fall back
+          useRelay = probe.ok;
+        } catch (_) {
+          useRelay = false;
+        }
+      }
 
+      const urlsToTry = [];
+      if (useRelay && data.relayUrl) {
+        // Relay is live — use it. Skip the cache URL entirely so all phones
+        // share the same byte stream and sync is automatic.
+        urlsToTry.push(window.location.origin + data.relayUrl);
+      } else {
+        // Relay not available — fall back to cache/proxy as before.
+        if (data.streamUrl) urlsToTry.push(window.location.origin + data.streamUrl);
+        if (data.publicStreamUrl) urlsToTry.push(data.publicStreamUrl);
+      }
       if (urlsToTry.length === 0) {
         statusEl.textContent = 'No audio source';
         return;
       }
 
       try {
-        statusEl.textContent = 'Downloading…';
-        const arrayBuf = await tryFetchAudio(urlsToTry);
-        if (!arrayBuf) throw new Error('All audio sources failed');
+        // Create a fresh <audio> element each track. Reusing one across
+        // tracks would inherit position/buffering state in subtle ways.
+        // Cheap to create — browsers optimize this.
+        if (htmlAudio) {
+          try { htmlAudio.pause(); htmlAudio.src = ''; htmlAudio.load(); } catch {}
+          htmlAudio = null;
+        }
+        const a = new Audio();
+        a.preload = 'auto';
+        a.crossOrigin = 'anonymous';  // allow Web Audio to tap if we ever need it again
+        a.src = urlsToTry[0];
+        a.muted = isMuted;
+        a.volume = 1;
 
-        statusEl.textContent = 'Decoding…';
-        currentBuffer = await audioCtx.decodeAudioData(arrayBuf);
-        statusEl.textContent = 'Syncing…';
-        scheduleStart();
+        // Wait for enough data to play. For the relay (live stream, no
+        // Content-Length) we use `canplay` immediately — `canplaythrough`
+        // never fires on a stream because the browser can't know when
+        // "through" is. For cached files we still prefer `canplaythrough`
+        // (more conservative, avoids rebuffering) with a 3s fallback.
+        await new Promise((resolve, reject) => {
+          let settled = false;
+          const onReady = () => { if (!settled) { settled = true; resolve(); } };
+          const onErr = () => { if (!settled) { settled = true; reject(new Error('audio load failed')); } };
+          if (useRelay) {
+            // Live stream — canplay fires as soon as a few bytes arrive
+            a.addEventListener('canplay', onReady, { once: true });
+          } else {
+            a.addEventListener('canplaythrough', onReady, { once: true });
+            // Fallback to canplay if canplaythrough doesn't fire in 3s —
+            // some browsers are stingy about firing it. Better to start
+            // with less buffer than to never start.
+            setTimeout(() => a.addEventListener('canplay', onReady, { once: true }), 3000);
+          }
+          a.addEventListener('error', onErr, { once: true });
+          setTimeout(() => { if (!settled) { settled = true; reject(new Error('audio load timeout')); } }, 15000);
+        });
+
+        // ---- Play immediately, correct after startup (v0.27.0) ----
+        // Earlier versions tried to align phones by scheduling .play() at
+        // the same wall-clock moment ~600ms in the future. That doesn't
+        // work: even with perfectly synced clocks and identical seek
+        // positions, the time between calling .play() and audio actually
+        // leaving the speaker varies by 0-200ms per device per session
+        // (decoder warmup, OS audio engine startup, buffer state). Two
+        // phones aiming at the same scheduled moment land on it at
+        // measurably different real moments and stay that distance apart
+        // for the rest of the track — producing the constant offset that
+        // listeners hear as an echo between car windows.
+        //
+        // Instead: every phone seeks to the expected position and plays
+        // immediately. The startup latency error is unavoidable at this
+        // step. Then ~1s later, after playback has stabilized, we measure
+        // htmlAudio.currentTime against the expected position computed
+        // from FPP's authoritative live-position channel, and seek-
+        // correct the error in one shot. Because both phones are
+        // correcting toward the same external reference (FPP), they
+        // converge to within their measurement noise of FPP, and
+        // therefore to within ~2x that noise of each other. Empirically
+        // this is well under 100ms — below the threshold of perception
+        // for synchronized music in adjacent cars.
+        const startPosition = getExpectedPosition();
+        if (startPosition < 0) {
+          a.currentTime = 0;
+        } else if (a.duration && startPosition >= a.duration) {
+          // Track will be over by the time we'd start. Track-change poll
+          // will pick up the next sequence on its own.
+          statusEl.textContent = 'Waiting for next track…';
+          return;
+        } else {
+          a.currentTime = startPosition;
+        }
+
+        // Set as active right before play so the drift loop's re-seek
+        // correction doesn't compete with us during the post-start window.
+        htmlAudio = a;
+        await a.play();
+        // Schedule the one-shot post-start measurement-and-correction.
+        // updateDriftDisplay() (running on its existing interval) checks
+        // this timestamp every tick and fires the correction once.
+        pendingPostStartCorrectionAtMs = Date.now() + 1000;
+        setPlayIcon(true);
+        statusEl.textContent = '';
+        if (audioStartedAtMs === 0) audioStartedAtMs = Date.now();
       } catch (err) {
-        statusEl.textContent = 'Load failed: ' + err.message;
+        statusEl.textContent = 'Load failed: ' + (err.message || err);
+        console.warn('[ShowPilot] HTML5 audio load failed:', err);
       }
     }
 
@@ -1529,14 +3234,72 @@
       throw lastErr || new Error('No URLs to try');
     }
 
+    // Compute the expected current playback position. This is the
+    // single source of truth for "where SHOULD audio be right now."
+    //
+    // Two paths:
+    //
+    // 1. Live position (preferred) — when the plugin has pushed a
+    //    recent FPP playback position via /api/plugin/position. The
+    //    update has a server timestamp; we extrapolate forward from
+    //    that point at native rate. Since this position came directly
+    //    from FPP's seconds_played, it reflects what FPP's hardware
+    //    audio output is actually doing, including buffer delay. Phones
+    //    aligning to this number naturally match the speakers.
+    //
+    // 2. Track-start extrapolation (fallback) — older plugin or initial
+    //    bootstrap before any position update has arrived. Uses the
+    //    fixed trackStartedAtMs anchor and assumes audio has been
+    //    progressing at native rate ever since. Less accurate over time
+    //    because trackStartedAtMs is stamped at FPP's "I'm starting
+    //    playback now" event, which precedes hardware audio emission
+    //    by the FPP buffer delay (~200ms typical).
+    //
+    // The audioSyncOffsetMs adjustment is applied in BOTH paths but
+    // serves different roles:
+    //  - Path 1: usually 0 — FPP's seconds_played already accounts for
+    //    its hardware audio path, so listeners hearing speakers will
+    //    naturally match phone playback. Offset can still be used to
+    //    deliberately bias if needed.
+    //  - Path 2: typically positive — compensates for the buffer delay
+    //    not reflected in trackStartedAtMs.
+    //
+    // Returns position in seconds. Caller decides what to do if value
+    // is past the buffer duration (track ended).
+    function getExpectedPosition() {
+      const offsetSec = audioSyncOffsetMs / 1000;
+      if (livePosition && livePosition.sequence === currentSequence) {
+        // livePosition.updatedAt is a SERVER timestamp (Date.now() on
+        // the server when FPP reported the position). To compute "how
+        // long has it been since that update?" we have to express
+        // current time on the same scale — i.e. server time. The
+        // client's raw Date.now() is whatever its OS thinks the time
+        // is, which can be off by hundreds of ms to several seconds
+        // depending on the phone's NTP/cell-tower sync state. Two
+        // phones with different clock biases here would see different
+        // elapsed values and seek to different positions in the track,
+        // producing exactly the constant phone-to-phone offset we're
+        // trying to eliminate. clockOffset is computed by burst NTP-lite
+        // on connect; adding it shifts client time onto server time.
+        const serverNow = Date.now() + clockOffset;
+        const elapsedSinceUpdate = (serverNow - livePosition.updatedAt) / 1000;
+        return livePosition.position + elapsedSinceUpdate - offsetSec;
+      }
+      // Fallback: extrapolate from track-start anchor
+      const serverNow = Date.now() + clockOffset;
+      return (serverNow - trackStartedAtMs) / 1000 - offsetSec;
+    }
+
     // ---- Schedule playback at sample-precise position ----
     function scheduleStart() {
       if (!currentBuffer || !audioCtx) return;
       stopAudio();
 
-      // Where should we be in the track right now (server time)?
-      const serverNow = Date.now() + clockOffset;
-      const positionSec = (serverNow - trackStartedAtMs) / 1000;
+      // Where should we be in the track right now? Defer to
+      // getExpectedPosition, which prefers live FPP-reported position
+      // (speaker-accurate) and falls back to track-start extrapolation
+      // (with offset applied) when no live position is available.
+      const positionSec = getExpectedPosition();
 
       // If already past the end, skip — next sync will pick up new track
       if (positionSec >= currentBuffer.duration) {
@@ -1549,14 +3312,26 @@
       const startWhen = audioCtx.currentTime + leadInSec;
       const startOffset = Math.max(0, positionSec + leadInSec);
 
+      // Each source gets its own gain node so the crossfade correction
+      // can ramp THIS source's volume independently. The main `gainNode`
+      // (connected to destination) handles user mute/volume; this source
+      // gain only handles sync transitions.
+      const srcGain = audioCtx.createGain();
+      srcGain.gain.value = 1;
+      srcGain.connect(gainNode);
+
       const src = audioCtx.createBufferSource();
       src.buffer = currentBuffer;
-      src.connect(gainNode);
+      src.connect(srcGain);
       src.start(startWhen, startOffset);
       src.onended = () => {
         if (currentSource === src) { currentSource = null; setPlayIcon(false); }
       };
       currentSource = src;
+      currentSourceGain = srcGain;
+      // Reset crossfade throttle on fresh schedule — we're a new track,
+      // any previous correction is irrelevant.
+      lastCrossfadeAtCtx = 0;
 
       // Capture the drift-measurement anchors. Together with audioCtx.
       // currentTime at any later moment, these let updateDriftDisplay()
@@ -1566,6 +3341,10 @@
       // especially on devices with crystal oscillator differences).
       trackScheduledAtAudioCtx = startWhen;
       trackScheduledAtPositionSec = startOffset;
+      // Initialize integration counter — we've "played" startOffset seconds
+      // into the file as of startWhen. Subsequent ticks accumulate from here.
+      integratedPlayedSec = startOffset;
+      lastIntegrationTime = startWhen;
       // outputLatency is the OS-reported delay between samples being
       // scheduled and samples actually leaving the speaker. We snapshot
       // it here so the drift display accounts for "what you HEAR now
@@ -1595,12 +3374,29 @@
         try { currentSource.disconnect(); } catch {}
         currentSource = null;
       }
+      if (currentSourceGain) {
+        try { currentSourceGain.disconnect(); } catch {}
+        currentSourceGain = null;
+      }
+      if (htmlAudio) {
+        try { htmlAudio.pause(); } catch {}
+        try { htmlAudio.src = ''; htmlAudio.load(); } catch {}
+        htmlAudio = null;
+      }
       // Clear drift anchors so updateDriftDisplay() bails until the
       // next track schedules new ones. Without this, the display would
       // keep drawing using stale anchors after stop().
       trackScheduledAtAudioCtx = 0;
       trackScheduledAtPositionSec = 0;
       trackScheduledOutputLatency = 0;
+      // Reset auto-sync state so the next track starts fresh.
+      lastAppliedRate = 1.0;
+      driftHistory.length = 0;
+      integratedPlayedSec = 0;
+      lastIntegrationTime = 0;
+      lastCrossfadeAtCtx = 0;
+      lastReseekAtMs = 0;
+      pendingPostStartCorrectionAtMs = 0;
     }
 
     // If the audio gate fires during playback (e.g. user walked outside the
@@ -1631,33 +3427,127 @@
     //     to travel — usually negligible, but two devices on opposite
     //     sides of a room can be 30-40ms apart just from physics)
     function updateDriftDisplay() {
-      if (!currentSource || !audioCtx || !trackStartedAtMs || !trackScheduledAtAudioCtx) {
+      // HTML5 audio path: compare element's currentTime to expected.
+      // If we have no element or it's not far enough into playback to
+      // measure meaningfully, clear the display and bail.
+      if (!htmlAudio || htmlAudio.paused || !currentSequence) {
         if (driftEl) driftEl.textContent = '';
         return;
       }
-      // Where is audio actually playing right now? The audio clock has
-      // advanced (audioCtx.currentTime - trackScheduledAtAudioCtx) seconds
-      // since we scheduled. Add that to where the track was at scheduling
-      // time. Then subtract output latency: "what the speaker is emitting
-      // RIGHT NOW" was actually scheduled outputLatency seconds ago.
-      const audioElapsed = audioCtx.currentTime - trackScheduledAtAudioCtx;
-      const actualPosition = trackScheduledAtPositionSec + audioElapsed - trackScheduledOutputLatency;
-
-      // Where SHOULD it be per server time?
-      const serverNow = Date.now() + clockOffset;
-      const expectedPosition = (serverNow - trackStartedAtMs) / 1000;
-
-      // Drift in seconds, rendered in ms with sign
+      const actualPosition = htmlAudio.currentTime;
+      const expectedPosition = getExpectedPosition();
       const drift = actualPosition - expectedPosition;
       const ms = Math.round(drift * 1000);
       driftEl.textContent = '· ' + (ms >= 0 ? '+' : '') + ms + 'ms';
       // Color thresholds: green <100ms, orange <500ms, red beyond.
-      // Worth noting: 100ms is the rough threshold where humans start
-      // to perceive lip-sync issues with video; for music it's less
-      // critical but still audible if you can hear two devices side by
-      // side.
       const absMs = Math.abs(ms);
       driftEl.style.color = absMs < 100 ? '#4ade80' : (absMs < 500 ? '#fb923c' : '#ef4444');
+
+      // ---- One-shot post-start correction (v0.27.0, median-of-3 in v0.28.2) ----
+      // Fires once, ~1s after .play() was called for the current track.
+      // This is the moment of truth for multi-phone sync: the browser's
+      // .play() startup latency has had time to settle, so the drift we
+      // measure now reflects per-device startup error (the dominant
+      // cause of phones being out of sync with each other and with the
+      // show speakers). We snap-correct it in one move — no rolling
+      // average, no throttle, tighter threshold than the long-tail loop.
+      //
+      // Median of 3 samples taken 25ms apart (v0.28.2): a single sample
+      // can be biased by event-loop lag, momentary clock-sync glitches,
+      // or jitter on the position-update channel — all amplified on
+      // cellular. Median of 3 is robust to one outlier sample without
+      // adding meaningful latency. The whole sampling window is ~50ms,
+      // imperceptible.
+      if (pendingPostStartCorrectionAtMs > 0 && Date.now() >= pendingPostStartCorrectionAtMs) {
+        // Clear FIRST so subsequent drift-loop ticks don't re-fire while
+        // the async sampler is collecting its 3 samples.
+        pendingPostStartCorrectionAtMs = 0;
+        const POST_START_THRESHOLD_MS = 80;
+        // Capture the audio element handle so a stopAudio()/track-change
+        // mid-sampling doesn't snap a stale element. If htmlAudio gets
+        // reassigned during the 50ms window, we abort the snap.
+        const audioForCorrection = htmlAudio;
+        (async () => {
+          const samples = [];
+          for (let i = 0; i < 3; i++) {
+            if (htmlAudio !== audioForCorrection) return; // track changed mid-sample, abort
+            samples.push(audioForCorrection.currentTime - getExpectedPosition());
+            if (i < 2) await new Promise(r => setTimeout(r, 25));
+          }
+          if (htmlAudio !== audioForCorrection) return; // track changed before snap, abort
+          samples.sort((a, b) => a - b);
+          const medianDrift = samples[1]; // middle of 3
+          const medianMs = Math.round(medianDrift * 1000);
+          if (Math.abs(medianMs) >= POST_START_THRESHOLD_MS) {
+            const target = audioForCorrection.currentTime - medianDrift;
+            if (target >= 0 && (!audioForCorrection.duration || target < audioForCorrection.duration - 0.1)) {
+              try {
+                audioForCorrection.currentTime = target;
+                // Reset rolling history — the snap invalidated whatever
+                // samples we had, and we want clean measurements going
+                // forward for the long-tail loop.
+                driftHistory.length = 0;
+                // Update lastReseekAtMs so the long-tail loop respects its
+                // own throttle relative to this snap (no double-correcting
+                // a few seconds later).
+                lastReseekAtMs = Date.now();
+                if (typeof console !== 'undefined' && console.info) {
+                  console.info('[ShowPilot] post-start correction:',
+                    'startup error', medianMs, 'ms (median of 3),',
+                    'samples', samples.map(s => Math.round(s * 1000) + 'ms').join(','),
+                    'snapped to', target.toFixed(3), 's');
+                }
+              } catch (err) {
+                console.warn('[ShowPilot] post-start correction failed:', err);
+              }
+            }
+          }
+        })();
+      }
+
+      // ---- Auto-correction via re-seek ----
+      // HTML5 audio doesn't support smooth crossfade between sources
+      // the way Web Audio did. The simplest correction is to set
+      // currentTime directly when drift exceeds a generous threshold.
+      // This produces a tiny audible blip (browser handles a brief
+      // re-buffer) but it's preferable to letting drift accumulate.
+      //
+      // Tolerance is more generous than the Web Audio version because:
+      // (1) every re-seek is audibly noticeable as a small pop, and
+      // (2) HTML5 audio plays at native rate without rate jitter, so
+      // small drift values tend to stay small instead of growing. We
+      // expect this to fire rarely — mostly on track-start before live
+      // position has been received, or after device sleep.
+      driftHistory.push(drift);
+      if (driftHistory.length > DRIFT_HISTORY_SIZE) driftHistory.shift();
+      if (driftHistory.length < DRIFT_HISTORY_SIZE) return;
+
+      const avgDrift = driftHistory.reduce((a, b) => a + b, 0) / driftHistory.length;
+      const avgDriftMs = Math.abs(avgDrift) * 1000;
+      const RESEEK_THRESHOLD_MS = 500;
+      if (avgDriftMs < RESEEK_THRESHOLD_MS) return;
+
+      // Throttle: don't re-seek more than once every 8 seconds.
+      const RESEEK_THROTTLE_SEC = 8;
+      const nowMs = Date.now();
+      if (lastReseekAtMs > 0 && (nowMs - lastReseekAtMs) < RESEEK_THROTTLE_SEC * 1000) return;
+
+      // Don't seek past end of track.
+      if (htmlAudio.duration && expectedPosition >= htmlAudio.duration - 0.1) return;
+      if (expectedPosition < 0) return;
+
+      try {
+        htmlAudio.currentTime = expectedPosition;
+        lastReseekAtMs = nowMs;
+        driftHistory.length = 0;
+        if (typeof console !== 'undefined' && console.info) {
+          console.info('[ShowPilot] sync correction (re-seek):',
+            'drift was', Math.round(avgDriftMs), 'ms,',
+            'snapped to', expectedPosition.toFixed(3), 's');
+        }
+      } catch (err) {
+        console.warn('[ShowPilot] re-seek failed:', err);
+      }
     }
 
     // ---- Player decoration ----
@@ -1726,7 +3616,69 @@
       decoLayer.innerHTML = renderDecoration(theme, animate);
       // Reset panel padding-top in case previous decoration needed extra room
       panel.style.paddingTop = (theme === 'none') ? '12px' : '20px';
+
+      // ---- Toast/banner theme inheritance (v0.24.4+) ----
+      // Make the winner toast match the player's color palette by mapping
+      // the player's CSS variables (--of-bg, --of-border, --of-glow) onto
+      // the toast's variables (--showpilot-toast-*). Templates that set
+      // their own --showpilot-toast-* vars in their CSS still win because
+      // we only fill values that aren't already template-set.
+      //
+      // requestAnimationFrame waits one frame so the panel's computed
+      // styles reflect the just-applied class change. Reading them
+      // synchronously here would return the OLD theme's values.
+      requestAnimationFrame(applyPlayerThemeToToast);
     }
+
+    // Read the player panel's computed theme variables and propagate them
+    // to the toast/banner CSS variables on :root. Idempotent — safe to call
+    // multiple times. Only sets a toast variable if (a) the player has a
+    // value for it AND (b) the toast variable isn't already set by the
+    // template's own stylesheet (we check inline-style only, since
+    // template-set values in stylesheets have lower specificity than
+    // root.style and would get overridden silently if we always wrote).
+    function applyPlayerThemeToToast() {
+      try {
+        const root = document.documentElement;
+        const panelEl = document.getElementById('of-listen-panel');
+        if (!panelEl) return;
+        const cs = getComputedStyle(panelEl);
+
+        // For custom solid/gradient colors (no theme class), the panel
+        // has inline background-image/background-color rather than the
+        // theme's --of-bg. Use whichever is actually rendering.
+        const ofBg = (cs.getPropertyValue('--of-bg') || '').trim();
+        const inlineImg = (panelEl.style.backgroundImage || '').trim();
+        const inlineColor = (panelEl.style.backgroundColor || '').trim();
+        const effectiveBg = inlineImg && inlineImg !== 'none'
+          ? inlineImg
+          : (inlineColor && inlineColor !== 'transparent' ? inlineColor : ofBg);
+
+        const ofBorder = (cs.getPropertyValue('--of-border') || '').trim();
+        const ofGlow = (cs.getPropertyValue('--of-glow') || '').trim();
+
+        // Helper — set a toast var only if we have a player value AND
+        // the user hasn't already explicitly set it (via inline root style).
+        // Template-set CSS rules are NOT inline — they have lower
+        // specificity and root.style overrides them, which is what we want
+        // unless the template explicitly opted into theme-matching by
+        // leaving the var unset. (Templates wanting custom colors should
+        // use !important in their CSS to win against this.)
+        const setIfPlayerHasValue = (varName, value) => {
+          if (!value) return;
+          root.style.setProperty(varName, value);
+        };
+        setIfPlayerHasValue('--showpilot-toast-bg', effectiveBg);
+        setIfPlayerHasValue('--showpilot-toast-border', ofBorder);
+        setIfPlayerHasValue('--showpilot-toast-accent', ofGlow);
+      } catch (e) {
+        // Non-fatal — toast just stays default-themed
+      }
+    }
+    // Expose for the winner toast script (injected separately) so it can
+    // re-apply on each toast render in case the theme changed since the
+    // last appearance.
+    window.ShowPilotApplyPlayerThemeToToast = applyPlayerThemeToToast;
 
     function renderDecoration(theme, animate) {
       const animClass = animate ? ' of-deco-animate' : '';

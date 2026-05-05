@@ -8,7 +8,7 @@ const express = require('express');
 const crypto = require('crypto');
 const router = express.Router();
 const config = require('../lib/config-loader');
-const { db, getConfig, getNowPlaying, getActiveViewerCount, getSequenceByName } = require('../lib/db');
+const { db, getConfig, getNowPlaying, getActiveViewerCount, getSequenceByName, castTiebreakVote, getNextUp } = require('../lib/db');
 const { bustCoverUrl } = require('../lib/cover-art');
 
 function ensureViewerToken(req, res) {
@@ -83,20 +83,55 @@ function isSequenceHidden(seq, cfg) {
   return seq.plays_since_hidden < cfg.hide_sequence_after_played;
 }
 
+// Per-sequence cooldown check (v0.29.2+). Returns null if the sequence
+// is NOT in cooldown (or has cooldown disabled), or an ISO timestamp
+// string indicating when the cooldown expires. The check is purely
+// query-time — there's no scheduled job to clear it; it just naturally
+// stops being true once enough time has passed.
+//
+// Used in three places: viewer state (so the UI can gray out), jukebox
+// add (defense in depth — UI hides it but reject the request server-side
+// too), and voting nomination (filter out cooled-down sequences).
+function sequenceCooldownUntil(seq) {
+  if (!seq.cooldown_minutes || seq.cooldown_minutes <= 0) return null;
+  if (!seq.last_played_at) return null;
+  // SQLite stores last_played_at as a UTC string ('YYYY-MM-DD HH:MM:SS').
+  // Treat it as UTC by appending 'Z' if no timezone is present, so Date
+  // parsing doesn't apply local-time interpretation.
+  const lpa = String(seq.last_played_at);
+  const utc = /[Z+\-]/.test(lpa.slice(-6)) ? lpa : lpa.replace(' ', 'T') + 'Z';
+  const lastMs = Date.parse(utc);
+  if (!Number.isFinite(lastMs)) return null;
+  const untilMs = lastMs + seq.cooldown_minutes * 60_000;
+  if (untilMs <= Date.now()) return null;
+  return new Date(untilMs).toISOString();
+}
+
 function viewerPresenceCheck(req, cfg) {
-  if (!cfg.check_viewer_present) return { ok: true };
-  if (cfg.viewer_present_mode !== 'GPS') return { ok: true };
-  if (!cfg.show_latitude || !cfg.show_longitude) {
-    return { ok: false, error: 'Show location not configured on server' };
+  // GPS check
+  if (cfg.check_viewer_present && cfg.viewer_present_mode === 'GPS') {
+    if (!cfg.show_latitude || !cfg.show_longitude) {
+      return { ok: false, error: 'Show location not configured on server' };
+    }
+    const lat = parseFloat(req.body?.viewerLat ?? req.query?.lat);
+    const lng = parseFloat(req.body?.viewerLng ?? req.query?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return { ok: false, error: 'Location required to vote/request. Please allow location access.' };
+    }
+    const dist = distanceMiles(cfg.show_latitude, cfg.show_longitude, lat, lng);
+    if (dist > cfg.check_radius_miles) {
+      return { ok: false, error: `You must be within ${cfg.check_radius_miles} miles of the show to interact.` };
+    }
   }
-  const lat = parseFloat(req.body?.viewerLat ?? req.query?.lat);
-  const lng = parseFloat(req.body?.viewerLng ?? req.query?.lng);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return { ok: false, error: 'Location required to vote/request. Please allow location access.' };
-  }
-  const dist = distanceMiles(cfg.show_latitude, cfg.show_longitude, lat, lng);
-  if (dist > cfg.check_radius_miles) {
-    return { ok: false, error: `You must be within ${cfg.check_radius_miles} miles of the show to interact.` };
+  // Location code check (v0.33.24+)
+  if (cfg.location_code_enabled) {
+    const submitted = (req.body?.locationCode ?? '').toString().trim();
+    const expected  = (cfg.location_code ?? '').toString().trim();
+    // If the admin enabled the feature but left the code blank, let everything
+    // through — same "misconfigured = open" convention as the GPS gate.
+    if (expected && submitted !== expected) {
+      return { ok: false, error: 'Invalid or missing access code.', invalidLocationCode: true };
+    }
   }
   return { ok: true };
 }
@@ -114,11 +149,32 @@ function runSafeguards(req, res, requiredMode) {
   }
   const presence = viewerPresenceCheck(req, cfg);
   if (!presence.ok) {
-    res.status(403).json({ error: presence.error });
+    const status = presence.invalidLocationCode ? 403 : 403;
+    res.status(status).json({ error: presence.error, invalidLocationCode: !!presence.invalidLocationCode });
     return null;
   }
   return cfg;
 }
+
+// GET /api/time
+// ============================================================
+// Lightweight time endpoint for NTP-style clock sync. The viewer
+// calls this in bursts of 3-5 to estimate clock skew between phone
+// and server with ~10-20ms accuracy. The implementation is deliberately
+// minimal — no auth, no DB, no logging — to minimize server-side
+// processing latency, which would otherwise corrupt the round-trip
+// time measurement and skew the offset calculation.
+//
+// Why this matters: phones' Date.now() can be off from real time by
+// hundreds of ms or more, especially after waking from sleep, and
+// each phone is off by a different amount. Without accurate clock
+// sync, two phones aligning to "FPP position + elapsed since update"
+// drift apart because they each compute "elapsed" using their own
+// (wrong) clocks. With this endpoint, both phones derive an accurate
+// server-time reference and align to the same target.
+router.get('/time', (req, res) => {
+  res.json({ t: Date.now() });
+});
 
 router.get('/state', (req, res) => {
   const cfg = getConfig();
@@ -128,18 +184,39 @@ router.get('/state', (req, res) => {
   const allSequences = db.prepare(`
     SELECT id, name, display_name, artist, category, image_url,
            duration_seconds, votable, jukeboxable,
-           last_played_at, plays_since_hidden
+           last_played_at, plays_since_hidden, cooldown_minutes
     FROM sequences
     WHERE visible = 1 AND is_psa = 0
     ORDER BY display_order, display_name
   `).all();
 
   const { bustSequenceCovers } = require('../lib/cover-art');
-  const sequences = bustSequenceCovers(allSequences.filter(s => !isSequenceHidden(s, cfg)));
+  // Filter sequences the viewer shouldn't see right now:
+  //   1. count-based hide rule (hide_sequence_after_played) — pre-existing
+  //   2. per-sequence cooldown (v0.29.2+) — sequence in cooldown drops out
+  //      of the response entirely so user-authored viewer templates don't
+  //      need to know about cooldown. They just render whatever's in the
+  //      list. When the cooldown expires, the sequence reappears on the
+  //      next poll.
+  // Both rules can apply independently — a sequence can be hidden by
+  // either or both.
+  //
+  // cooldown_minutes is used internally by the cooldown filter but isn't
+  // needed by the viewer client. Strip it so we don't ship configuration
+  // state to anonymous users. last_played_at and plays_since_hidden
+  // were already exposed to viewers pre-v0.29.2 and we keep them for
+  // backward compat with custom templates.
+  const sequences = bustSequenceCovers(
+    allSequences
+      .filter(s => !isSequenceHidden(s, cfg))
+      .filter(s => !sequenceCooldownUntil(s))
+      .map(({ cooldown_minutes, ...rest }) => rest)
+  );
 
   const voteCounts = db.prepare(`
     SELECT sequence_name, COUNT(*) AS count FROM votes WHERE round_id = ? GROUP BY sequence_name
   `).all(cfg.current_voting_round);
+  
 
   // Queue: all unplayed entries, ordered by request time. This now includes
   // entries currently handed off to the plugin (handed_off_at IS NOT NULL,
@@ -154,34 +231,66 @@ router.get('/state', (req, res) => {
   const nowPlayingName = nowPlaying.sequence_name || null;
   const queue = queueAll.filter(q => q.sequence_name !== nowPlayingName);
 
-  // "Next up" priority order:
-  //   1. JUKEBOX mode + queue has entries (after now-playing) → first queued
-  //   2. VOTING mode + votes cast → highest-voted song
-  //   3. Otherwise → whatever the schedule says
-  let nextUp = nowPlaying.next_sequence_name || null;
-  if (cfg.viewer_control_mode === 'JUKEBOX' && queue.length > 0) {
-    nextUp = queue[0].sequence_name;
-  } else if (cfg.viewer_control_mode === 'VOTING') {
-    const top = db.prepare(`
-      SELECT sequence_name, COUNT(*) AS n FROM votes
-      WHERE round_id = ?
-      GROUP BY sequence_name
-      ORDER BY n DESC
-      LIMIT 1
-    `).get(cfg.current_voting_round);
-    if (top) nextUp = top.sequence_name;
+  const nextUp = getNextUp(cfg, nowPlayingName);
+
+  // Now-playing timer support (v0.32.9+):
+  // The {NOW_PLAYING_TIMER} placeholder in viewer templates needs two
+  // pieces of info to render a countdown: when the song started and how
+  // long the song is. started_at is stored as UTC text in SQLite
+  // ("YYYY-MM-DD HH:MM:SS" with no zone marker); convert to ISO with
+  // explicit Z so the client's Date parser treats it as UTC. We look up
+  // duration with a direct query rather than searching `allSequences`
+  // because the now-playing track might be a PSA, hidden, or in cooldown
+  // — all of which are filtered out of allSequences. The timer should
+  // still tick for those.
+  let nowPlayingStartedAtIso = null;
+  let nowPlayingDurationSeconds = null;
+  if (nowPlaying.sequence_name && nowPlaying.started_at) {
+    nowPlayingStartedAtIso = nowPlaying.started_at.replace(' ', 'T') + 'Z';
+    const npRow = db.prepare(
+      `SELECT duration_seconds FROM sequences WHERE name = ? LIMIT 1`
+    ).get(nowPlaying.sequence_name);
+    if (npRow && npRow.duration_seconds) {
+      nowPlayingDurationSeconds = npRow.duration_seconds;
+    }
   }
 
   res.json({
     showName: cfg.show_name,
     viewerControlMode: cfg.viewer_control_mode,
     nowPlaying: nowPlaying.sequence_name || null,
+    nowPlayingStartedAtIso,
+    nowPlayingDurationSeconds,
     nextScheduled: nextUp,
     activeViewers,
     sequences,
     voteCounts,
     queue,
     requiresLocation: cfg.check_viewer_present === 1 && cfg.viewer_present_mode === 'GPS',
+    requiresLocationCode: cfg.location_code_enabled === 1,
+    // Vote shifting (v0.32.6+): mirror of bootstrap allowVoteChange so an
+    // admin toggling this mid-show propagates to viewers without a reload.
+    allowVoteChange: cfg.allow_vote_change === 1,
+    // Current voting round id. Viewers track this so they can detect a
+    // round change (server advanced past their last vote) and clear
+    // their local hasVoted flag. This is the "last-write-wins" backup
+    // for the voteReset socket event, which can be missed when mobile
+    // devices background-suspend or briefly drop network. Without it,
+    // "You've already voted" persists across rounds until manual refresh.
+    currentVotingRound: cfg.current_voting_round,
+    // Tiebreak state (v0.24.0+) — viewers use this to render the
+    // tiebreak banner when reconnecting mid-tiebreak (e.g. someone
+    // opened the page after the tiebreakStarted socket event already
+    // fired). Empty/false when no tiebreak active.
+    tiebreak: cfg.tiebreak_active === 1 ? {
+      candidates: (cfg.tiebreak_candidates || '').split(',').map(s => s.trim()).filter(Boolean),
+      // Absolute deadline timestamp (ISO server time). Viewer computes
+      // remaining = deadline - now using its server-time offset from
+      // burst clock sync, so the displayed countdown is accurate
+      // regardless of network/render lag.
+      deadlineAtIso: cfg.tiebreak_deadline_at,
+      startedAtIso: cfg.tiebreak_started_at,
+    } : null,
   });
 });
 
@@ -215,29 +324,121 @@ router.post('/vote', (req, res) => {
   if (isSequenceHidden(seq, cfg)) {
     return res.status(400).json({ error: 'That sequence was recently played. Try another.' });
   }
+  const cooldownUntilV = sequenceCooldownUntil(seq);
+  if (cooldownUntilV) {
+    return res.status(400).json({
+      error: 'That sequence was recently played. It will be available again shortly.',
+      cooldown_until: cooldownUntilV,
+    });
+  }
+
+  // Repeat blockers (v0.31.1+): block votes for the currently-playing song
+  // or the one already winning the round (which would otherwise be next up).
+  // For the "next up" case in voting, the highest-vote sequence is what
+  // gets handed to FPP — checking the top of the tally matches /state.
+  const npV = getNowPlaying();
+  if (cfg.block_vote_currently_playing && npV.sequence_name === seq.name) {
+    return res.status(409).json({ error: 'That song is playing right now. Try another.' });
+  }
+  if (cfg.block_vote_next_up) {
+    const top = db.prepare(`
+      SELECT sequence_name FROM votes
+      WHERE round_id = ?
+      GROUP BY sequence_name
+      ORDER BY COUNT(*) DESC
+      LIMIT 1
+    `).get(cfg.current_voting_round);
+    const nextUp = top ? top.sequence_name : (npV.next_sequence_name || null);
+    if (nextUp && nextUp === seq.name) {
+      return res.status(409).json({ error: 'That song is already up next. Try another.' });
+    }
+  }
 
   const token = ensureViewerToken(req, res);
 
+  // Vote shifting (v0.32.6+):
+  // When prevent_multiple_votes=1 AND allow_vote_change=1, a second vote in
+  // the same round REPLACES the user's prior vote. Same effective limit (one
+  // vote per viewer per round), just lets them change their mind. We track
+  // whether this was an insert or a shift so the client can show appropriate
+  // feedback ("Vote changed!" vs. "Vote cast!"), and so we don't double-count
+  // for PSA interaction tracking — a shift is still ONE interaction.
+  let shifted = false;
+  let sameVote = false;
   if (cfg.prevent_multiple_votes) {
-    const already = db.prepare(
-      `SELECT 1 FROM votes WHERE viewer_token = ? AND round_id = ? LIMIT 1`
+    const prior = db.prepare(
+      `SELECT id, sequence_name FROM votes WHERE viewer_token = ? AND round_id = ? LIMIT 1`
     ).get(token, cfg.current_voting_round);
-    if (already) return res.status(409).json({ error: 'You have already voted this round' });
-  }
-
-  try {
-    db.prepare(`
-      INSERT INTO votes (sequence_id, sequence_name, viewer_token, round_id)
-      VALUES (?, ?, ?, ?)
-    `).run(seq.id, seq.name, token, cfg.current_voting_round);
-  } catch (e) {
-    if (String(e.message).includes('UNIQUE')) {
-      return res.status(409).json({ error: 'You have already voted this round' });
+    if (prior) {
+      if (!cfg.allow_vote_change) {
+        return res.status(409).json({ error: 'You have already voted this round' });
+      }
+      // Vote-change is on. If the user clicked the same song they already
+      // voted for, treat as a no-op (don't churn the row, don't emit a
+      // misleading "vote changed" signal). Otherwise atomically swap.
+      if (prior.sequence_name === seq.name) {
+        sameVote = true;
+      } else {
+        // Atomic delete-then-insert in a transaction so concurrent voteUpdate
+        // emissions never see "user has zero votes mid-shift."
+        const swap = db.transaction(() => {
+          db.prepare(`DELETE FROM votes WHERE id = ?`).run(prior.id);
+          db.prepare(`
+            INSERT INTO votes (sequence_id, sequence_name, viewer_token, round_id)
+            VALUES (?, ?, ?, ?)
+          `).run(seq.id, seq.name, token, cfg.current_voting_round);
+        });
+        try {
+          swap();
+        } catch (e) {
+          if (String(e.message).includes('UNIQUE')) {
+            // Shouldn't happen — we just deleted the conflicting row in the
+            // same txn — but handle defensively.
+            return res.status(409).json({ error: 'Vote conflict, please retry' });
+          }
+          throw e;
+        }
+        shifted = true;
+      }
     }
-    throw e;
   }
 
-  db.prepare(`UPDATE config SET interactions_since_last_psa = interactions_since_last_psa + 1 WHERE id = 1`).run();
+  if (!shifted && !sameVote) {
+    try {
+      db.prepare(`
+        INSERT INTO votes (sequence_id, sequence_name, viewer_token, round_id)
+        VALUES (?, ?, ?, ?)
+      `).run(seq.id, seq.name, token, cfg.current_voting_round);
+    } catch (e) {
+      if (String(e.message).includes('UNIQUE')) {
+        return res.status(409).json({ error: 'You have already voted this round' });
+      }
+      throw e;
+    }
+  }
+
+  // Diagnostic logging — emitted at info level so it shows up in pm2 logs.
+  // Helps debug "votes always show 0" reports by confirming what was written.
+  // Counts include all rounds for this token+sequence so we can spot if a
+  // vote went into the wrong round_id (e.g. round was advanced unexpectedly).
+  try {
+    const totalForRound = db.prepare(
+      `SELECT COUNT(*) AS n FROM votes WHERE round_id = ?`
+    ).get(cfg.current_voting_round).n;
+    const totalForSeq = db.prepare(
+      `SELECT COUNT(*) AS n FROM votes WHERE sequence_name = ? AND round_id = ?`
+    ).get(seq.name, cfg.current_voting_round).n;
+    const action = sameVote ? 'same' : (shifted ? 'shift' : 'insert');
+    console.log(`[vote:${action}] seq="${seq.name}" round=${cfg.current_voting_round} token=${(token||'').slice(0,8)} → seq_total=${totalForSeq} round_total=${totalForRound}`);
+  } catch (e) {
+    console.warn('[vote] diagnostic logging failed:', e.message);
+  }
+
+  // Don't double-count for PSA on a shift — it's the same user changing their
+  // mind, not a new interaction. Same-vote no-op also doesn't count.
+  if (!shifted && !sameVote) {
+    db.prepare(`UPDATE config SET interactions_since_last_psa = interactions_since_last_psa + 1 WHERE id = 1`).run();
+  }
 
   const io = req.app.get('io');
   if (io) {
@@ -245,6 +446,64 @@ router.post('/vote', (req, res) => {
       `SELECT sequence_name, COUNT(*) AS count FROM votes WHERE round_id = ? GROUP BY sequence_name`
     ).all(cfg.current_voting_round);
     io.emit('voteUpdate', { counts });
+  }
+
+  res.json({ ok: true, shifted, sameVote });
+});
+
+// ============================================================
+// POST /api/tiebreak-vote
+// ============================================================
+// Casts a vote during an active tiebreak. Separate from /vote because
+// the validation is different (must be a candidate; main-round voters
+// allowed; uses tiebreak_votes table) and because the success response
+// triggers a different toast on the client. Body: { sequenceName }.
+router.post('/tiebreak-vote', (req, res) => {
+  const cfg = runSafeguards(req, res, 'VOTING');
+  if (!cfg) return;
+
+  if (cfg.tiebreak_active !== 1) {
+    return res.status(400).json({ error: 'No tiebreak in progress' });
+  }
+  const candidates = (cfg.tiebreak_candidates || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const { sequenceName } = req.body || {};
+  if (!sequenceName) return res.status(400).json({ error: 'Missing sequenceName' });
+  if (!candidates.includes(sequenceName)) {
+    return res.status(400).json({ error: 'That sequence is not a tiebreak candidate' });
+  }
+
+  const seq = getSequenceByName(sequenceName);
+  if (!seq) return res.status(404).json({ error: 'Unknown sequence' });
+
+  const token = ensureViewerToken(req, res);
+  const result = castTiebreakVote(token, sequenceName, cfg.current_voting_round, candidates);
+  if (result === 'duplicate') {
+    return res.status(409).json({ error: 'You have already voted in this tiebreak' });
+  }
+  if (result === 'invalid_candidate') {
+    return res.status(400).json({ error: 'Invalid tiebreak candidate' });
+  }
+
+  // Diagnostic logging — mirror the main /vote endpoint.
+  try {
+    const totalForRound = db.prepare(
+      `SELECT COUNT(*) AS n FROM tiebreak_votes WHERE round_id = ?`
+    ).get(cfg.current_voting_round).n;
+    console.log(`[tiebreak-vote] seq="${seq.name}" round=${cfg.current_voting_round} token=${(token||'').slice(0,8)} → tiebreak_round_total=${totalForRound}`);
+  } catch (e) {
+    console.warn('[tiebreak-vote] diagnostic logging failed:', e.message);
+  }
+
+  // Broadcast updated tiebreak vote tallies so connected viewers see
+  // the count tick up. Combined with main-round counts on the client
+  // side for the final score display.
+  const io = req.app.get('io');
+  if (io) {
+    const tbCounts = db.prepare(
+      `SELECT sequence_name, COUNT(*) AS count FROM tiebreak_votes WHERE round_id = ? GROUP BY sequence_name`
+    ).all(cfg.current_voting_round);
+    io.emit('tiebreakVoteUpdate', { counts: tbCounts });
   }
 
   res.json({ ok: true });
@@ -264,6 +523,36 @@ router.post('/jukebox/add', (req, res) => {
   }
   if (isSequenceHidden(seq, cfg)) {
     return res.status(400).json({ error: 'That sequence was recently played. Try another.' });
+  }
+  // Cooldown check (v0.29.2+). The viewer UI already hides cooled-down
+  // sequences, but a stale page or a direct API caller could still try
+  // to request one — reject server-side too.
+  const cooldownUntil = sequenceCooldownUntil(seq);
+  if (cooldownUntil) {
+    return res.status(400).json({
+      error: 'That sequence was recently played. It will be available again shortly.',
+      cooldown_until: cooldownUntil,
+    });
+  }
+
+  // Repeat blockers (v0.31.1+): don't let viewers queue the song that's
+  // currently playing or the one already lined up next. "Next up" mirrors
+  // the same priority order /state computes — first in the jukebox queue
+  // if there is one, otherwise FPP's scheduled next.
+  const np = getNowPlaying();
+  if (cfg.block_request_currently_playing && np.sequence_name === seq.name) {
+    return res.status(409).json({ error: 'That song is playing right now. Try another.' });
+  }
+  if (cfg.block_request_next_up) {
+    const firstQueued = db.prepare(
+      `SELECT sequence_name FROM jukebox_queue
+       WHERE played = 0 AND sequence_name != COALESCE(?, '')
+       ORDER BY requested_at ASC LIMIT 1`
+    ).get(np.sequence_name || null);
+    const nextUp = firstQueued ? firstQueued.sequence_name : (np.next_sequence_name || null);
+    if (nextUp && nextUp === seq.name) {
+      return res.status(409).json({ error: 'That song is already up next. Try another.' });
+    }
   }
 
   const token = ensureViewerToken(req, res);
@@ -368,13 +657,44 @@ router.get('/visual-config', (req, res) => {
       }
     }
   }
+  // showNotPlaying is a separate, NON-sticky signal. The audio gate latches
+  // on refresh (see applyAudioGateState) because gate state implies "you
+  // can't listen here at all" — but show-not-playing should toggle freely
+  // as FPP starts/stops between songs without forcing viewers to refresh.
+  //
+  // Threshold rationale: the plugin POSTs /api/plugin/position every ~1s
+  // while a sequence is playing, and that handler bumps now_playing.last_updated.
+  // 10s = ~10 missed position reports before we say "not playing" — comfortable
+  // margin against transient network blips while still going stale within
+  // seconds when FPP idles, the plugin hangs, or the network partitions.
+  // (When FPP cleanly transitions to idle, the plugin POSTs /playing with an
+  // empty sequence, which sets sequence_name = NULL and trips the first
+  // branch below — instant, doesn't wait for the threshold.)
+  let showNotPlaying = false;
+  const np = getNowPlaying();
+  if (!np || !np.sequence_name) {
+    showNotPlaying = true;
+  } else {
+    // SQLite CURRENT_TIMESTAMP is UTC. last_updated is stored as 'YYYY-MM-DD HH:MM:SS'
+    // (no TZ suffix). Adding 'Z' makes Date.parse treat it as UTC, matching how
+    // it was written.
+    const lastMs = Date.parse(np.last_updated + 'Z');
+    if (!isFinite(lastMs) || (Date.now() - lastMs) > 10_000) {
+      showNotPlaying = true;
+    }
+  }
+
   res.json({
-    pageSnowEnabled: cfg.page_snow_enabled === 1,
+    pageSnowEnabled: cfg.page_snow_enabled === 1 || cfg.page_effect === 'snow',
+    pageEffect: cfg.page_effect || (cfg.page_snow_enabled === 1 ? 'snow' : 'none'),
+    pageEffectColor: cfg.page_effect_color || '',
+    pageEffectIntensity: cfg.page_effect_intensity || 'medium',
     playerDecoration: cfg.player_decoration || 'none',
     playerDecorationAnimated: cfg.player_decoration_animated !== 0,
     playerCustomColor: cfg.player_custom_color || '',
     audioGateBlocked,
     audioGateReason,
+    showNotPlaying,
   });
 });
 
@@ -382,6 +702,15 @@ router.get('/visual-config', (req, res) => {
 router.get('/now-playing-audio', (req, res) => {
   const np = getNowPlaying();
   const cfg = getConfig();
+
+  // Master audio kill-switch. When admin has disabled audio entirely
+  // (e.g. they use PulseMesh / Icecast / FM and don't want ShowPilot
+  // hosting audio at all), respond with a stable shape that signals
+  // the viewer to hide the launcher and skip polling. We bypass the
+  // gate logic below — there's nothing to gate.
+  if (cfg.audio_enabled === 0) {
+    return res.json({ playing: false, audioDisabled: true });
+  }
 
   // Audio distance gating — used for copyright compliance to prevent listeners
   // who aren't actually present at the show from streaming the audio.
@@ -416,7 +745,10 @@ router.get('/now-playing-audio', (req, res) => {
 
   // Visual settings that always apply regardless of playback state
   const visualConfig = {
-    pageSnowEnabled: cfg.page_snow_enabled === 1,
+    pageSnowEnabled: cfg.page_snow_enabled === 1 || cfg.page_effect === 'snow',
+    pageEffect: cfg.page_effect || (cfg.page_snow_enabled === 1 ? 'snow' : 'none'),
+    pageEffectColor: cfg.page_effect_color || '',
+    pageEffectIntensity: cfg.page_effect_intensity || 'medium',
     playerDecoration: cfg.player_decoration || 'none',
     playerDecorationAnimated: cfg.player_decoration_animated !== 0,
     playerCustomColor: cfg.player_custom_color || '',
@@ -448,7 +780,9 @@ router.get('/now-playing-audio', (req, res) => {
   let versionParam = '';
   try {
     const audioCache = require('../lib/audio-cache');
-    const cached = audioCache.getCachedFileForMediaName(seq.media_name);
+    // Look up via sequence name (resolves to sequence's audio_hash if
+    // set, falls back to media_name for legacy installs).
+    const cached = audioCache.getCachedFileForSequence(seq.name);
     if (cached && cached.hash) {
       versionParam = '?v=' + cached.hash.slice(0, 8);
     }
@@ -469,6 +803,29 @@ router.get('/now-playing-audio', (req, res) => {
     // Timestamp-anchored sync — Web Audio API uses these for sample-precise scheduling
     trackStartedAtMs: startedAtMs,
     serverNowMs: Date.now(),
+    // Live position from FPP's reported playback. If the plugin is
+    // sending /api/plugin/position updates, this reflects FPP's actual
+    // hardware audio output position within the last ~500ms. Viewers
+    // use this as an authoritative anchor instead of extrapolating from
+    // trackStartedAtMs (which has whatever offset was baked in at
+    // track-change time, drifting from FPP's true position over the
+    // course of a track). Null if no live position has been reported
+    // since server startup or the reported sequence doesn't match.
+    livePosition: (() => {
+      try {
+        const { getLivePosition } = require('./plugin');
+        const lp = getLivePosition && getLivePosition();
+        if (lp && lp.sequence === np.sequence_name) {
+          return {
+            position: lp.position,
+            updatedAt: lp.updatedAt,
+          };
+        }
+      } catch (e) {
+        // If the require fails for any reason, just omit live position.
+      }
+      return null;
+    })(),
     // Audio is served via the ShowPilot proxy, which fetches bytes from
     // FPP's built-in /api/file/Music/<name> endpoint. Same-origin path always
     // works; the public URL is for cellular/external listeners hitting through
@@ -477,6 +834,15 @@ router.get('/now-playing-audio', (req, res) => {
     publicStreamUrl: cfg.public_base_url
       ? `${String(cfg.public_base_url).replace(/\/+$/, '')}/api/audio-stream/${encodeURIComponent(seq.name)}${versionParam}`
       : '',
+    // Relay URL — try this first for live sync. Falls back to streamUrl if relay
+    // is not active (503 response). Relay is same-origin only (LAN/local listeners);
+    // external listeners use publicStreamUrl which goes through the cache path.
+    relayUrl: `/api/audio-relay/${encodeURIComponent(seq.name)}`,
+    // Per-show sync offset in milliseconds. Positive = play audio LATER
+    // (compensates for audio arriving too early — the typical case after
+    // the cache change, since cache delivery is faster than the previous
+    // FPP-proxy path). Negative = play EARLIER. Set in admin Settings.
+    audioSyncOffsetMs: cfg.audio_sync_offset_ms || 0,
     // Visual settings (snow, decoration, custom color) — always present
     ...visualConfig,
   });
@@ -485,7 +851,55 @@ router.get('/now-playing-audio', (req, res) => {
 // Audio proxy — checks the local audio cache first (populated by the plugin
 // during sync). Falls back to proxying from FPP if not cached. Supports
 // HTTP Range requests so browsers can seek/resume.
+// ============================================================
+// GET /api/audio-relay/:sequence
+// ============================================================
+// Live broadcast relay endpoint. The server maintains one open
+// connection to FPP per playing song and fans the bytes to every
+// connected listener simultaneously. All listeners hear the same
+// bytes at the same wall-clock moment → automatic sync, no offset.
+//
+// Falls back to the cache/proxy endpoint if no relay is active for
+// this sequence (song not currently playing, relay not started yet,
+// or audio is disabled).
+router.get('/audio-relay/:sequence', (req, res) => {
+  const cfg = getConfig();
+  if (cfg.audio_enabled === 0) {
+    return res.status(404).send('Audio is disabled for this show.');
+  }
+
+  const reqName = String(req.params.sequence || '');
+  const { addListener, getActiveSequence } = require('../lib/audio-relay');
+
+  // Normalize: look up the canonical sequence name the same way audio-stream does.
+  let seq = getSequenceByName(reqName);
+  if (!seq) {
+    seq = db.prepare(`SELECT * FROM sequences WHERE LOWER(name) = LOWER(?) LIMIT 1`).get(reqName);
+  }
+  if (!seq) return res.status(404).send('Sequence not found');
+
+  const activeSeq = getActiveSequence();
+  if (activeSeq && activeSeq.toLowerCase() === seq.name.toLowerCase()) {
+    // Relay is live for this sequence — add this viewer to the broadcast.
+    const added = addListener(seq.name, res);
+    if (added) return; // response stays open, relay drives it from here
+  }
+
+  // No active relay (song not playing, between songs, relay not started yet).
+  // Return 503 so the viewer falls back to the cache endpoint.
+  res.status(503).json({ error: 'relay_not_active', fallback: true });
+});
+
 router.get('/audio-stream/:sequence', async (req, res) => {
+  // Master audio kill-switch — admin disabled audio entirely. Bail before
+  // any cache lookup or FPP proxy work. 404 (not 403) so the browser
+  // treats this the same as a missing file rather than a permission
+  // problem; viewer-side launcher is already hidden at this point.
+  const cfg = getConfig();
+  if (cfg.audio_enabled === 0) {
+    return res.status(404).send('Audio is disabled for this show.');
+  }
+
   // Case-insensitive lookup in case viewer page or admin renamed the sequence
   // with different casing than what we have in DB.
   const reqName = String(req.params.sequence || '');
@@ -511,7 +925,7 @@ router.get('/audio-stream/:sequence', async (req, res) => {
   // with installs that haven't upgraded their plugin yet.
   try {
     const audioCache = require('../lib/audio-cache');
-    const cachedFile = audioCache.getCachedFileForMediaName(seq.media_name);
+    const cachedFile = audioCache.getCachedFileForSequence(seq.name);
     if (cachedFile) {
       // Aggressive caching for cellular listeners. Audio file bytes are
       // immutable — same hash, same content. Cloudflare or other edge
@@ -566,7 +980,6 @@ router.get('/audio-stream/:sequence', async (req, res) => {
   res.setHeader('X-Audio-Source', 'fpp');
 
   // Need FPP host from plugin status
-  const cfg = getConfig();
   const fppHost = cfg.plugin_fpp_host;
   if (!fppHost) {
     return res.status(503).send('Audio streaming unavailable — plugin has not connected yet');

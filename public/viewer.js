@@ -4,7 +4,23 @@
   'use strict';
 
   const el = (id) => document.getElementById(id);
-  const state = { mode: 'OFF', sequences: [], voteCounts: {}, queue: [], hasVoted: false, serverRequirements: { requiresLocation: false } };
+  const state = {
+    mode: 'OFF',
+    sequences: [],
+    voteCounts: {},
+    queue: [],
+    hasVoted: false,
+    // v0.32.6+: when allowVoteChange is true, the user can click another
+    // song to switch their vote. votedFor tracks the current pick so we
+    // can highlight it and no-op a click on the same song.
+    allowVoteChange: false,
+    votedFor: null,
+    // Tracks the last round id we saw so we can clear hasVoted/votedFor
+    // when the server advances past it. Without this, a user who voted
+    // in round N would stay locked out for round N+1 until reload.
+    lastKnownRoundId: null,
+    serverRequirements: { requiresLocation: false },
+  };
 
   async function fetchState() {
     try {
@@ -22,12 +38,36 @@
     el('nowPlayingName').textContent = data.nowPlaying
       ? (data.sequences.find(s => s.name === data.nowPlaying)?.display_name || data.nowPlaying)
       : '—';
+    // v0.32.8+: Up Next is shown in all modes. Server computes nextScheduled
+    // as the queue head in JUKEBOX, the current vote leader in VOTING, and
+    // whatever the schedule reports otherwise. Display name lookup falls
+    // back to the raw sequence name if the sequence isn't in the visible list
+    // (cooldown / hidden) — fine, since the server still returns the name.
+    const nextEl = el('nextUpName');
+    if (nextEl) {
+      nextEl.textContent = data.nextScheduled
+        ? (data.sequences.find(s => s.name === data.nextScheduled)?.display_name || data.nextScheduled)
+        : '—';
+    }
 
     state.mode = data.viewerControlMode;
     state.sequences = data.sequences;
     state.voteCounts = Object.fromEntries((data.voteCounts || []).map(v => [v.sequence_name, v.count]));
     state.queue = data.queue || [];
+    state.allowVoteChange = data.allowVoteChange === true;
     state.serverRequirements = { requiresLocation: data.requiresLocation === true };
+
+    // Round-advance detection (v0.32.6+): when the server's currentVotingRound
+    // changes, our local hasVoted/votedFor are stale. Clear them so the user
+    // can vote in the new round without reloading. Mirrors the same logic in
+    // rf-compat.js.
+    if (typeof data.currentVotingRound === 'number') {
+      if (state.lastKnownRoundId !== null && data.currentVotingRound !== state.lastKnownRoundId) {
+        state.hasVoted = false;
+        state.votedFor = null;
+      }
+      state.lastKnownRoundId = data.currentVotingRound;
+    }
 
     el('modeVoting').classList.toggle('hidden', data.viewerControlMode !== 'VOTING');
     el('modeJukebox').classList.toggle('hidden', data.viewerControlMode !== 'JUKEBOX');
@@ -44,7 +84,12 @@
       const count = state.voteCounts[seq.name] || 0;
       const li = document.createElement('li');
       const btn = document.createElement('button');
-      btn.disabled = state.hasVoted;
+      // Disable buttons only when the user has voted AND can't shift.
+      // When shifting is allowed, leave them all enabled so the user can
+      // click a different song. The current pick is highlighted so it's
+      // obvious which one their vote is on.
+      btn.disabled = state.hasVoted && !state.allowVoteChange;
+      if (state.votedFor === seq.name) btn.classList.add('voted');
       btn.innerHTML = `
         <span>${escapeHtml(seq.display_name)}${seq.artist ? ' — ' + escapeHtml(seq.artist) : ''}</span>
         <span class="vote-count">${count}</span>
@@ -58,6 +103,8 @@
   function renderJukeboxList() {
     const list = el('jukeboxList');
     list.innerHTML = '';
+    // Sequences in cooldown are filtered out server-side (in /state) so
+    // we don't need to render them as disabled — they simply aren't here.
     state.sequences.filter(s => s.jukeboxable).forEach(seq => {
       const li = document.createElement('li');
       const btn = document.createElement('button');
@@ -115,6 +162,10 @@
   }
 
   async function vote(sequenceName) {
+    // No-op if the user clicked the same song they already voted for.
+    // (Server would also no-op, but skipping the round-trip keeps the
+    // UI quiet and avoids a misleading "Vote cast" toast.)
+    if (state.hasVoted && state.votedFor === sequenceName) return;
     let body;
     try {
       body = await buildBody({ sequenceName }, state.serverRequirements);
@@ -131,7 +182,8 @@
     const data = await res.json();
     if (res.ok) {
       state.hasVoted = true;
-      toast('Vote cast!');
+      state.votedFor = sequenceName;
+      toast(data.shifted ? 'Vote changed!' : 'Vote cast!');
       renderVoteList();
     } else {
       toast(data.error || 'Vote failed');
@@ -196,12 +248,22 @@
     socket.on('nowPlaying', (data) => {
       const seq = state.sequences.find(s => s.name === data.sequenceName);
       el('nowPlayingName').textContent = seq ? seq.display_name : data.sequenceName;
+      // Song change ⇒ next-up changes too. Fetch full state to refresh
+      // the Up Next line + queue without a 30s wait.
+      fetchState();
     });
     socket.on('voteUpdate', (data) => {
       state.voteCounts = Object.fromEntries(data.counts.map(v => [v.sequence_name, v.count]));
-      if (state.mode === 'VOTING') renderVoteList();
+      if (state.mode === 'VOTING') {
+        renderVoteList();
+        // In voting mode, "next up" = current vote leader, which the
+        // server recomputes on every vote. Refresh so the Up Next line
+        // tracks live.
+        fetchState();
+      }
     });
     socket.on('queueUpdated', () => { fetchState(); });
+    socket.on('nextScheduled', () => { fetchState(); });
     socket.on('viewerCount', (data) => { el('viewerCount').textContent = data.count || 0; });
   } catch (e) {
     console.warn('Socket.io unavailable; falling back to polling.');

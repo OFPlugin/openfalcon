@@ -275,6 +275,129 @@
       vertical-align: middle;
       box-shadow: 0 0 6px rgba(245,158,11,0.4);
     }
+    /* ============================================================
+       ShowPilot logo (mark + wordmark) — themeable
+       ============================================================ */
+    :root, .theme-stage-dark {
+      --logo-primary: var(--rgb-amber, #f59e0b);
+      --logo-accent:  var(--accent, #ef4444);
+      --logo-dim:     rgba(245, 158, 11, 0.45);
+    }
+    .theme-stage-light {
+      --logo-primary: var(--text, #1a2c4f);
+      --logo-accent:  var(--accent, #dc2626);
+      --logo-dim:     rgba(26, 44, 79, 0.35);
+    }
+    /* Logo sits as a flex row inside the existing .app-brand wrapper.
+       Extra margin-right gives breathing room between the version label
+       and whatever follows (mode pill, etc.) so the brand cluster reads
+       as one unit. */
+    .app-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin-right: 0.5rem;
+    }
+    .app-brand-mark {
+      width: 28px;
+      height: 28px;
+      flex-shrink: 0;
+    }
+    .app-brand-mark rect.lp { fill: var(--logo-primary); }
+    .app-brand-mark rect.la { fill: var(--logo-accent); }
+    .app-brand-mark rect.ld { fill: var(--logo-dim); }
+    .app-brand-text { color: var(--text); }
+    /* The original .app-version had margin-left for inline layout. Now that
+       .app-brand is flex with gap, the margin-left is additive — null it.
+       Same applies to .app-beta-pill which lives inside .app-brand. */
+    .app-brand .app-version,
+    .app-brand .app-beta-pill { margin-left: 0; }
+    @media (max-width: 600px) {
+      .app-brand { margin-right: 0.25rem; gap: 0.4rem; }
+      .app-brand-mark { width: 22px; height: 22px; }
+    }
+
+    .login-brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+    .login-brand-mark {
+      width: 44px;
+      height: 44px;
+      flex-shrink: 0;
+    }
+    .login-brand-mark rect.lp { fill: var(--logo-primary); }
+    .login-brand-mark rect.la { fill: var(--logo-accent); }
+    .login-brand-mark rect.ld { fill: var(--logo-dim); }
+    .login-brand h1 { margin: 0; }
+    .login-brand-sub {
+      color: var(--text-dim);
+      font-weight: 400;
+    }
+
+    /* ============================================================
+       Viewer-control slide toggle (replaces the old Turn On/Off button).
+       The wrapping <label> keeps id="toggleViewerBtn" so existing JS that
+       calls getElementById('toggleViewerBtn') still finds it. The visual
+       state is driven by data-on="1"/"0" on the .toggle-track child, so
+       updateViewerControlBadge can flip it with a single attribute set.
+       Colors derive from the existing --status-* theme tokens, so every
+       theme (Christmas, Halloween, etc.) gets a coherent toggle without
+       per-theme work. */
+    .vc-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+      margin-left: auto;
+    }
+    .vc-toggle .toggle-track {
+      position: relative;
+      width: 48px;
+      height: 26px;
+      background: var(--status-danger-soft);
+      border: 1px solid var(--status-danger);
+      border-radius: 999px;
+      transition: background 0.2s ease, border-color 0.2s ease;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+    .vc-toggle .toggle-thumb {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      background: var(--status-danger);
+      border-radius: 50%;
+      transition: transform 0.2s ease, background 0.2s ease;
+    }
+    .vc-toggle .toggle-track[data-on="1"] {
+      background: var(--status-success-soft);
+      border-color: var(--status-success);
+    }
+    .vc-toggle .toggle-track[data-on="1"] .toggle-thumb {
+      transform: translateX(22px);
+      background: var(--status-success);
+    }
+    .vc-toggle .toggle-text {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-weight: 500;
+      min-width: 22px;
+    }
+    .vc-toggle:hover .toggle-track {
+      filter: brightness(1.1);
+    }
+    .vc-toggle:focus-visible .toggle-track {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
     .mode-pill {
       font-size: 0.72rem;
       padding: 4px 10px;
@@ -286,6 +409,30 @@
     .mode-pill.jukebox { background: var(--rgb-blue); color: #fff; box-shadow: 0 0 12px rgba(59,130,246,0.3); }
     .mode-pill.off { background: var(--status-neutral); color: #fff; }
     .header-spacer { margin-left: auto; }
+    /* "Show" link in admin header — opens the viewer in a new tab.
+       Styled like the user button (subtle outline on dark background)
+       so admins recognize it as a peer action, not a primary action. */
+    .header-show-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.82rem;
+      color: var(--text);
+      text-decoration: none;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .header-show-btn:hover {
+      background: var(--bg-tertiary);
+      border-color: var(--border-hover);
+    }
+    .header-show-btn-icon {
+      font-size: 0.95rem;
+      line-height: 1;
+    }
     .header-user {
       display: inline-flex;
       align-items: center;
@@ -732,6 +879,143 @@
     }
 
     /* ============================================================
+     * COMPREHENSIVE MOBILE STYLES (v0.23.2+)
+     * ============================================================
+     * The admin panel was originally designed desktop-first. This
+     * block makes it usable on phones (≤768px viewports). The high-
+     * impact fixes:
+     *   - Reduce horizontal padding on main/cards so content fits
+     *   - Wrap and shrink form rows so labels stack above inputs
+     *   - Allow tables to scroll horizontally inside their container
+     *   - Make input widths flex to fill available width
+     *   - Reduce header font sizes so they stop wrapping awkwardly
+     *   - Sub-tabs scroll horizontally like top-level tabs
+     *   - Modal dialogs go full-width minus a small margin
+     *
+     * The desktop design at >768px is unchanged. */
+    @media (max-width: 768px) {
+      /* Container padding — reclaim ~20px of horizontal space */
+      main {
+        padding: 1rem 0.75rem 2.5rem;
+      }
+      /* Cards likewise — keep some breathing room but tighter */
+      .card {
+        padding: 0.9rem;
+        margin-bottom: 0.9rem;
+        border-radius: 8px;
+      }
+      .card h2 { font-size: 1rem; }
+      .card h3 { font-size: 0.9rem; }
+      /* Top tab buttons — keep horizontal scroll but tighten padding */
+      .tab-nav { padding: 0 0.5rem; }
+      .tab-btn { padding: 0.7rem 0.9rem; font-size: 0.85rem; }
+      /* Sub-tabs (Settings inner tabs) - same horizontal-scroll treatment */
+      .sub-tabs {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        white-space: nowrap;
+        -webkit-overflow-scrolling: touch;
+      }
+      .sub-tab { white-space: nowrap; flex-shrink: 0; }
+      /* Form rows — stack vertically so labels and inputs each get
+         full width instead of squeezing side-by-side */
+      .row {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      /* Inputs inside .row that had explicit max-widths set inline
+         (e.g. style="max-width: 120px") would otherwise stay narrow.
+         Override to take available width on mobile. */
+      .row input[type="text"],
+      .row input[type="number"],
+      .row input[type="email"],
+      .row input[type="url"],
+      .row input[type="password"],
+      .row select {
+        max-width: 100% !important;
+        width: 100%;
+        min-width: 0;
+      }
+      /* Tables — wrap their parent in horizontal-scroll-as-needed.
+         We set the wrapper class via JS or just use overflow-x on
+         common ancestors. Most admin tables are inside .card; give
+         that wrapper the overflow. */
+      .card { overflow-x: auto; }
+      table {
+        min-width: 100%;
+        font-size: 0.85rem;
+      }
+      table th, table td {
+        padding: 0.4rem 0.5rem;
+      }
+      /* Buttons — make sure long button rows wrap rather than overflow */
+      button, button.secondary, button.danger, button.success {
+        font-size: 0.85rem;
+        padding: 0.5rem 0.85rem;
+      }
+      /* Modals — fill available width */
+      .modal-content,
+      [class*="modal"] > div {
+        max-width: calc(100vw - 1.5rem) !important;
+        margin: 0.75rem;
+      }
+      /* Brand bar gets tight on mobile */
+      .app-brand { font-size: 0.95rem; }
+      .app-version { font-size: 0.75rem; }
+      /* Header layout — let items wrap to a second line so the logout
+         button doesn't get pushed off-screen. The header's a flex
+         container; without flex-wrap, contents that don't fit just
+         overflow. We also tighten the gap/padding so the wrapped
+         layout doesn't take much extra vertical space. */
+      .app-header {
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        padding: 0.6rem 0.75rem;
+      }
+      /* On wrap, push the meta info to a new line so the brand stays
+         on top with mode-pill and the action buttons stay together
+         on the bottom. The header-spacer (margin-left: auto) handles
+         the layout naturally once wrap is enabled. */
+      .header-meta {
+        font-size: 0.75rem;
+      }
+      .theme-select {
+        padding: 0.3rem 0.5rem;
+        font-size: 0.8rem;
+      }
+      .header-show-btn {
+        padding: 0.35rem 0.6rem;
+        font-size: 0.8rem;
+      }
+      .header-show-btn-label {
+        /* Hide the "Show" text, just leave the arrow icon to save space.
+           The icon is meaningful enough on its own as "open in new tab". */
+        display: none;
+      }
+      /* Location map (Settings → Safeguards → GPS) — shrink height
+         on mobile so it doesn't dominate the small screen */
+      #locationMap {
+        height: 200px !important;
+      }
+      /* PWA install button on admin — show full width on mobile */
+      #pwaInstallBtn {
+        width: 100%;
+        justify-content: center;
+      }
+    }
+
+    /* Extra-tight phones (≤480px) — small additional cleanup */
+    @media (max-width: 480px) {
+      main { padding: 0.75rem 0.5rem 2.5rem; }
+      .card { padding: 0.75rem; }
+      h1 { font-size: 1.15rem; }
+      h2 { font-size: 1rem; }
+      h3 { font-size: 0.9rem; }
+      .tab-btn { padding: 0.6rem 0.7rem; font-size: 0.8rem; }
+      .sub-tab { padding: 0.5rem 0.75rem; font-size: 0.8rem; }
+    }
+
+    /* ============================================================
      * BUTTONS
      * ============================================================ */
     button {
@@ -765,6 +1049,95 @@
     button.success {
       background: var(--status-success);
       color: #fff;
+    }
+
+    /* ============================================================
+     * FILE INPUTS (Backup restore, etc.)
+     * ============================================================
+     * Browsers ship hideous default file pickers — these styles align
+     * the file input with the rest of the admin UI. We can't fully
+     * style the file picker button cross-browser, but ::file-selector-button
+     * works in Chrome/Edge/Firefox/Safari 14+ which is plenty.
+     */
+    input[type="file"].sp-file-input {
+      display: block;
+      width: 100%;
+      max-width: 480px;
+      padding: 0.5rem;
+      background: var(--bg-input);
+      color: var(--text);
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    input[type="file"].sp-file-input:hover {
+      border-color: var(--border-hover);
+      background: var(--bg-tertiary);
+    }
+    input[type="file"].sp-file-input::file-selector-button {
+      padding: 0.45rem 0.85rem;
+      margin-right: 0.6rem;
+      background: var(--accent);
+      color: var(--accent-text);
+      border: none;
+      border-radius: 4px;
+      font-size: 0.82rem;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s;
+    }
+    input[type="file"].sp-file-input::file-selector-button:hover {
+      background: var(--accent-hover);
+    }
+
+    /* ============================================================
+     * BACKUP & RESTORE — section policy panels
+     * ============================================================
+     * Each section in the restore picker (Settings, Sequences, Templates,
+     * Users, Secrets, Cover art) renders as a small bordered panel with
+     * a header row and a row of radio buttons. These match the
+     * .cover-pick / .row card patterns used elsewhere.
+     */
+    .sp-restore-panel {
+      padding: 0.75rem 0.85rem;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 0.5rem;
+    }
+    .sp-restore-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .sp-restore-panel-radios {
+      margin-top: 0.5rem;
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      font-size: 0.9rem;
+    }
+    .sp-restore-panel-radios label {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      margin: 0;
+      cursor: pointer;
+    }
+    .sp-restore-panel-radios input[type="radio"] {
+      width: auto;
+      margin: 0;
+    }
+    .sp-restore-actions {
+      margin-top: 1rem;
+      display: flex;
+      gap: 0.5rem;
     }
 
     /* ============================================================
@@ -1242,6 +1615,52 @@
     .sp-modal-actions button.sp-btn-danger:hover {
       filter: brightness(1.1);
     }
+
+    /* ============================================================
+       Demo banner (v0.31.0+) — only renders when /api/public/demo-status
+       returns demoMode:true. Sits at the very top of the page so it
+       shows above both the login view and the main appView.
+       ============================================================ */
+    #demoBanner {
+      display: none; /* JS unhides when demoMode is on */
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 10px 20px;
+      background: linear-gradient(90deg, #ff7a3c, #ffb155);
+      color: #1a0e00;
+      font-size: 13.5px;
+      font-weight: 500;
+      letter-spacing: .005em;
+      box-shadow: 0 1px 0 rgba(0,0,0,.15);
+      flex-wrap: wrap;
+      text-align: center;
+    }
+    #demoBanner strong {
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: rgba(0,0,0,.18);
+      color: #fff;
+    }
+    #demoBanner .demo-sep {
+      opacity: .35;
+    }
+    #demoBanner code {
+      background: rgba(0,0,0,.22);
+      color: #fff;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12.5px;
+    }
+    #demoBanner .demo-countdown {
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+    }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <script src="https://unpkg.com/monaco-editor@0.45.0/min/vs/loader.js"></script>
@@ -1266,14 +1685,86 @@
       });
     })();
   </script>
+  <!-- ====================================================
+       PWA install support
+       ====================================================
+       Browsers offer "Install as App" when a manifest is referenced
+       and a service worker is registered. The manifest is gated by
+       the pwa_admin_enabled config flag — when disabled, the URL
+       returns 404 and the browser just silently doesn't offer install.
+       Registration is always present; a 404'd manifest is harmless. -->
+  <link rel="manifest" href="/admin-manifest.json" />
+  <link rel="apple-touch-icon" href="/admin-icon" />
+  <meta name="theme-color" content="#0a0a0a" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function() {
+      // Register the service worker scoped to /admin/ so it doesn't
+      // clash with the viewer's root-scoped registration. Without
+      // distinct scopes, Android Chrome treats both manifests as the
+      // same installable app and refuses to install the second one
+      // when the first is already installed.
+      navigator.serviceWorker.register('/sw.js', { scope: '/admin/' }).catch(function() { /* harmless */ });
+    });
+  }
+  window.addEventListener('beforeinstallprompt', function(e) {
+    e.preventDefault();
+    window.__deferredInstallPrompt = e;
+    // If the install button exists on the page, reveal it so the user
+    // can trigger install at their preferred moment. We don't auto-show
+    // a prompt — Chrome heavily throttles those if dismissed.
+    var btn = document.getElementById('pwaInstallBtn');
+    if (btn) btn.style.display = '';
+  });
+  </script>
 </head>
 <body class="theme-stage-dark">
+
+  <!-- Demo banner (v0.31.0+) — hidden unless /api/public/demo-status reports
+       demoMode:true. Populated and unhidden by initDemoBanner() near the
+       bottom of this file. -->
+  <div id="demoBanner" role="status" aria-live="polite">
+    <strong>Demo</strong>
+    <span class="demo-msg">Live demo instance — feel free to break things</span>
+    <span class="demo-sep">·</span>
+    <span class="demo-creds-wrap" hidden>Login: <code class="demo-creds"></code></span>
+    <span class="demo-sep demo-creds-wrap" hidden>·</span>
+    <span>Resets in <span class="demo-countdown">—</span></span>
+  </div>
 
   <!-- ============================================================
        LOGIN VIEW
        ============================================================ -->
   <div id="loginView" class="hidden">
-    <h1>ShowPilot Admin</h1>
+    <div class="login-brand">
+      <svg class="login-brand-mark" viewBox="-70 -70 140 140" xmlns="http://www.w3.org/2000/svg" aria-label="ShowPilot logo">
+        <rect class="ld" x="-2.3" y="-32" width="4.5" height="4.5" rx="0.9"/>
+        <rect class="ld" x="26" y="-2.3" width="4.5" height="4.5" rx="0.9"/>
+        <rect class="ld" x="-2.3" y="27" width="4.5" height="4.5" rx="0.9"/>
+        <rect class="ld" x="-32" y="-2.3" width="4.5" height="4.5" rx="0.9"/>
+        <rect class="lp" x="-5" y="-55" width="10" height="10" rx="2"/>
+        <rect class="la" x="30" y="-40" width="9" height="9" rx="2"/>
+        <rect class="lp" x="45" y="-5" width="10" height="10" rx="2"/>
+        <rect class="la" x="30" y="31" width="9" height="9" rx="2"/>
+        <rect class="lp" x="-5" y="45" width="10" height="10" rx="2"/>
+        <rect class="la" x="-39" y="31" width="9" height="9" rx="2"/>
+        <rect class="lp" x="-55" y="-5" width="10" height="10" rx="2"/>
+        <rect class="la" x="-39" y="-40" width="9" height="9" rx="2"/>
+        <rect class="lp" x="-10" y="-15" width="5" height="5" rx="1"/>
+        <rect class="lp" x="-10" y="-9"  width="5" height="5" rx="1"/>
+        <rect class="lp" x="-10" y="-3"  width="5" height="5" rx="1"/>
+        <rect class="lp" x="-10" y="3"   width="5" height="5" rx="1"/>
+        <rect class="lp" x="-10" y="9"   width="5" height="5" rx="1"/>
+        <rect class="lp" x="-4"  y="-9"  width="5" height="5" rx="1"/>
+        <rect class="lp" x="-4"  y="-3"  width="5" height="5" rx="1"/>
+        <rect class="lp" x="-4"  y="3"   width="5" height="5" rx="1"/>
+        <rect class="lp" x="2"   y="-3"  width="5" height="5" rx="1"/>
+        <rect class="lp" x="8"   y="-3"  width="5" height="5" rx="1"/>
+      </svg>
+      <h1>ShowPilot <span class="login-brand-sub">Admin</span></h1>
+    </div>
     <p class="subtitle">Enter your username and password to continue.</p>
     <input type="text" id="loginUsername" placeholder="Username" autocomplete="username" autocapitalize="none" autocorrect="off" onkeydown="if(event.key==='Enter')document.getElementById('loginPassword').focus();" />
     <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')login();" />
@@ -1283,6 +1774,21 @@
     </label>
     <button onclick="login()">Log in</button>
     <div id="loginMsg"></div>
+
+    <!-- First-boot restore: shows only when this server is in its initial
+         "admin/admin must change password" state. Lets a fresh install
+         restore from a backup before the operator logs in for the first
+         time, so they don't have to set up the show twice. -->
+    <div id="firstBootRestore" class="hidden" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
+      <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
+        New install? You can restore from a previous ShowPilot backup
+        instead of setting everything up from scratch.
+      </p>
+      <input type="file" id="firstBootRestoreFile" accept="application/json,.json"
+             class="sp-file-input"
+             onchange="firstBootRestore(event)" style="margin-bottom: 0.5rem;" />
+      <div id="firstBootRestoreMsg" class="muted" style="font-size: 0.85rem;"></div>
+    </div>
   </div>
 
   <!-- ============================================================
@@ -1292,7 +1798,34 @@
 
     <!-- Sticky header -->
     <header class="app-header">
-      <span class="app-brand">ShowPilot <span class="app-version">v0.19.5-beta</span><span class="app-beta-pill">Beta</span></span>
+      <span class="app-brand">
+        <svg class="app-brand-mark" viewBox="-70 -70 140 140" xmlns="http://www.w3.org/2000/svg" aria-label="ShowPilot logo">
+          <rect class="ld" x="-2.3" y="-32" width="4.5" height="4.5" rx="0.9"/>
+          <rect class="ld" x="26" y="-2.3" width="4.5" height="4.5" rx="0.9"/>
+          <rect class="ld" x="-2.3" y="27" width="4.5" height="4.5" rx="0.9"/>
+          <rect class="ld" x="-32" y="-2.3" width="4.5" height="4.5" rx="0.9"/>
+          <rect class="lp" x="-5" y="-55" width="10" height="10" rx="2"/>
+          <rect class="la" x="30" y="-40" width="9" height="9" rx="2"/>
+          <rect class="lp" x="45" y="-5" width="10" height="10" rx="2"/>
+          <rect class="la" x="30" y="31" width="9" height="9" rx="2"/>
+          <rect class="lp" x="-5" y="45" width="10" height="10" rx="2"/>
+          <rect class="la" x="-39" y="31" width="9" height="9" rx="2"/>
+          <rect class="lp" x="-55" y="-5" width="10" height="10" rx="2"/>
+          <rect class="la" x="-39" y="-40" width="9" height="9" rx="2"/>
+          <rect class="lp" x="-10" y="-15" width="5" height="5" rx="1"/>
+          <rect class="lp" x="-10" y="-9"  width="5" height="5" rx="1"/>
+          <rect class="lp" x="-10" y="-3"  width="5" height="5" rx="1"/>
+          <rect class="lp" x="-10" y="3"   width="5" height="5" rx="1"/>
+          <rect class="lp" x="-10" y="9"   width="5" height="5" rx="1"/>
+          <rect class="lp" x="-4"  y="-9"  width="5" height="5" rx="1"/>
+          <rect class="lp" x="-4"  y="-3"  width="5" height="5" rx="1"/>
+          <rect class="lp" x="-4"  y="3"   width="5" height="5" rx="1"/>
+          <rect class="lp" x="2"   y="-3"  width="5" height="5" rx="1"/>
+          <rect class="lp" x="8"   y="-3"  width="5" height="5" rx="1"/>
+        </svg>
+        <span class="app-brand-text">ShowPilot</span>
+        <span class="app-version">v0.33.27</span>
+      </span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
       <span class="header-meta">
@@ -1300,7 +1833,15 @@
         <span>·</span>
         <span><span id="headerPluginDot" class="plugin-dot offline"></span> <span id="headerPluginText">plugin</span></span>
       </span>
-      <select id="themeSelect" class="theme-select" onchange="applyTheme(this.value)" title="Choose theme">
+      <!-- Open the public viewer page in a new tab. Useful when admin
+           wants to see the show as listeners experience it without
+           losing their admin context. New-tab so admin session stays
+           active in this tab. -->
+      <a href="/" target="_blank" rel="noopener" class="header-show-btn" title="Open viewer page in new tab">
+        <span class="header-show-btn-icon" aria-hidden="true">↗</span>
+        <span class="header-show-btn-label">Show</span>
+      </a>
+      <select id="themeSelect" class="theme-select" onchange="setTheme(this.value)" title="Choose theme">
         <option value="stage-dark">Stage · Dark</option>
         <option value="stage-light">Stage · Light</option>
         <option value="christmas">🎄 Christmas</option>
@@ -1393,7 +1934,13 @@
           <div class="row" style="align-items: center;">
             <strong style="font-size: 1rem;">Viewer Control:</strong>
             <span id="viewerControlStatus" class="pill pill-neutral">—</span>
-            <button id="toggleViewerBtn" onclick="toggleViewerControl()" style="margin-left: auto;">Toggle</button>
+            <label id="toggleViewerBtn" class="vc-toggle" tabindex="0"
+                   onclick="toggleViewerControl()"
+                   onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();toggleViewerControl();}"
+                   role="switch" aria-checked="false" title="Toggle viewer control on/off">
+              <span class="toggle-text" data-off-text="Off">Off</span>
+              <span class="toggle-track" data-on="0"><span class="toggle-thumb"></span></span>
+            </label>
           </div>
           <div class="row">
             <label for="modeSelect" style="margin: 0;">Mode:</label>
@@ -1463,6 +2010,7 @@
                   <th style="width: 70px;">Vote</th>
                   <th style="width: 70px;">Jukebox</th>
                   <th style="width: 60px;">PSA</th>
+                  <th style="width: 90px;" title="After this sequence plays, hide it from request UI and purge other queued copies for this many minutes. 0 = no cooldown.">Cooldown<br><span style="font-weight: normal; font-size: 0.75rem; color: var(--text-muted);">(min)</span></th>
                   <th style="width: 200px;"></th>
                 </tr>
               </thead>
@@ -1670,7 +2218,7 @@
 
             <div id="designerEditorWrap">
               <div class="row" style="margin-bottom: 0.5rem; align-items: center;">
-                <input type="text" id="tplName" placeholder="Template name" style="flex: 1; margin: 0;" />
+                <input type="text" id="tplName" placeholder="Template name" style="flex: 1; margin: 0;" oninput="onTemplateNameInput()" />
                 <span id="tplMeta" class="muted"></span>
                 <span id="tplDraftBadge" class="of-tpl-status of-tpl-status-saved">SAVED</span>
                 <button class="secondary of-tpl-bypass-lock" id="tplLockBtn" onclick="toggleTemplateLock()" title="Lock to prevent accidental edits">🔓 Lock</button>
@@ -1937,13 +2485,135 @@
           </div>
 
           <h3 style="margin-top: 1.25rem;">Page-wide effects</h3>
-          <div class="row">
-            <input type="checkbox" id="cfg_page_snow_enabled" onchange="saveSetting('page_snow_enabled', this.checked ? 1 : 0)" />
-            <label for="cfg_page_snow_enabled" style="margin: 0;">❄️ Snow falling across the viewer page</label>
-          </div>
-          <p class="muted" style="font-size: 0.8rem; margin: 0.25rem 0 0;">
-            50 snowflakes drift down across the entire page. Doesn't block clicks. Visitors with reduced-motion accessibility setting won't see animations.
+          <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+            Pick an ambient effect that drifts, falls, or twinkles across the entire viewer page.
+            Visitors with the reduced-motion accessibility setting see nothing — animation is opt-in
+            at the OS level.
           </p>
+          <div class="grid-2" style="margin-bottom: 0.75rem;">
+            <div>
+              <label for="cfg_page_effect">Effect</label>
+              <select id="cfg_page_effect" onchange="saveSetting('page_effect', this.value); updatePageEffectColorPlaceholder();">
+                <option value="none">None</option>
+                <option value="snow">❄️ Snow</option>
+                <option value="leaves">🍂 Leaves</option>
+                <option value="fireworks">🎆 Fireworks</option>
+                <option value="hearts">💗 Hearts</option>
+                <option value="stars">✨ Twinkling stars</option>
+                <option value="bats">🦇 Bats</option>
+                <option value="confetti">🎉 Confetti</option>
+                <option value="petals">🌸 Petals</option>
+                <option value="embers">🔥 Embers</option>
+                <option value="bubbles">🫧 Bubbles</option>
+                <option value="rain">🌧️ Rain</option>
+              </select>
+            </div>
+            <div>
+              <label for="cfg_page_effect_intensity">Intensity</label>
+              <select id="cfg_page_effect_intensity" onchange="saveSetting('page_effect_intensity', this.value)">
+                <option value="subtle">Subtle</option>
+                <option value="medium">Medium</option>
+                <option value="heavy">Heavy</option>
+              </select>
+            </div>
+          </div>
+          <div class="row" style="gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+            <label for="cfg_page_effect_color" style="margin: 0;">Color tint</label>
+            <input type="color" id="cfg_page_effect_color_picker"
+                   onchange="onPageEffectColorPick(this.value)"
+                   style="width: 44px; height: 32px; padding: 2px; border: 1px solid var(--border); border-radius: 4px;" />
+            <input type="text" id="cfg_page_effect_color" placeholder="(default)"
+                   onchange="saveSetting('page_effect_color', this.value); syncPageEffectColorPicker();"
+                   style="width: 110px; font-family: monospace;" />
+            <button type="button" class="secondary" onclick="resetPageEffectColor()" style="font-size: 0.85rem;">Use default</button>
+          </div>
+          <p class="muted" style="font-size: 0.8rem; margin: 0.5rem 0 0;">
+            Each effect has a sensible default color (snow=white, leaves=orange, hearts=pink, etc).
+            Leave the color blank or click "Use default" to use it; otherwise pick any CSS color.
+          </p>
+        </div>
+
+        <div class="card">
+          <h2>Listen-on-Phone Launcher Button</h2>
+          <p class="muted" style="font-size: 0.85rem; margin: 0.25rem 0 0.75rem;">
+            The floating button viewers tap to open the audio player. Pick a built-in icon, upload your own, and choose how it looks.
+            Changes take effect on viewer page reload.
+          </p>
+
+          <div class="row">
+            <div style="flex: 1;">
+              <label for="cfg_launcher_icon_source">Icon</label>
+              <select id="cfg_launcher_icon_source" onchange="saveSetting('launcher_icon_source', this.value); updateLauncherUI();">
+                <option value="default">🎧 Default (headphones emoji)</option>
+                <option value="preset:headphones">🎧 Headphones</option>
+                <option value="preset:tree">🎄 Christmas tree</option>
+                <option value="preset:pumpkin">🎃 Pumpkin</option>
+                <option value="preset:ghost">👻 Ghost</option>
+                <option value="preset:snowflake">❄️ Snowflake</option>
+                <option value="preset:music">🎶 Music notes</option>
+                <option value="preset:heart">💝 Heart</option>
+                <option value="preset:shamrock">☘️ Shamrock</option>
+                <option value="preset:star">⭐ Star</option>
+                <option value="custom">🖼️ Custom image…</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Custom image picker — only visible when source = 'custom' -->
+          <div class="row" id="cfg_launcher_custom_row" style="display:none;">
+            <div style="flex: 1;">
+              <label for="launcherIconFile">Upload icon (PNG, JPG, SVG, or WebP — under 250KB)</label>
+              <input type="file" id="launcherIconFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" />
+              <div id="launcherIconPreviewWrap" style="margin-top: 0.6rem;">
+                <span class="muted" style="font-size: 0.8rem;">No custom icon uploaded yet.</span>
+              </div>
+              <button class="secondary" type="button" id="launcherIconClearBtn"
+                      style="margin-top: 0.5rem; display:none;"
+                      onclick="clearLauncherIcon();">
+                Clear custom icon
+              </button>
+              <p class="muted" style="font-size: 0.78rem; margin: 0.4rem 0 0;">
+                Square images work best. Transparent PNGs are recommended when the round button background is hidden (below).
+              </p>
+            </div>
+          </div>
+
+          <div class="row">
+            <input type="checkbox" id="cfg_launcher_show_chrome" onchange="saveSetting('launcher_show_chrome', this.checked ? 1 : 0); updateLauncherPreview();" />
+            <label for="cfg_launcher_show_chrome" style="margin: 0;">Show round button background</label>
+          </div>
+          <p class="muted" style="font-size: 0.78rem; margin: 0.25rem 0 0.75rem;">
+            On: classic red circular button with the icon inside. Off: bare icon — your image becomes the button. Use a clearly-clickable image when off.
+          </p>
+
+          <div class="row">
+            <div style="flex: 1; max-width: 280px;">
+              <label for="cfg_launcher_size">Size</label>
+              <select id="cfg_launcher_size" onchange="saveSetting('launcher_size', this.value); updateLauncherPreview();">
+                <option value="small">Small (40 px)</option>
+                <option value="medium">Medium (52 px) — default</option>
+                <option value="large">Large (72 px)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Live preview -->
+          <div style="margin-top: 0.9rem;">
+            <div class="muted" style="font-size: 0.78rem; margin-bottom: 0.4rem;">Preview (how viewers will see it):</div>
+            <div style="background: linear-gradient(135deg, #1a1a2e, #2a1a3e);
+                        border-radius: 8px; border: 1px solid var(--border);
+                        padding: 1.25rem; display: flex; align-items: center; justify-content: center;
+                        min-height: 110px;">
+              <div id="launcherPreviewBtn" style="
+                  width: 52px; height: 52px; border-radius: 50%;
+                  background: rgba(220,38,38,0.95); color: white;
+                  border: 2px solid rgba(255,255,255,0.4);
+                  font-size: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+                  display: flex; align-items: center; justify-content: center;
+                  padding: 0; line-height: 1; overflow: hidden;
+                  ">🎧</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1957,7 +2627,12 @@
             <div class="sub-tab active" data-subtab="general" onclick="switchTab('general')">General</div>
             <div class="sub-tab" data-subtab="jukebox" onclick="switchTab('jukebox')">Jukebox</div>
             <div class="sub-tab" data-subtab="voting" onclick="switchTab('voting')">Voting</div>
+            <div class="sub-tab" data-subtab="audio" onclick="switchTab('audio')">Audio</div>
+            <div class="sub-tab" data-subtab="app" onclick="switchTab('app')">App</div>
             <div class="sub-tab" data-subtab="safeguards" onclick="switchTab('safeguards')">Interaction Safeguards</div>
+            <div class="sub-tab" data-subtab="public-access" onclick="switchTab('public-access')">Public Access</div>
+            <div class="sub-tab" data-subtab="backup" onclick="switchTab('backup')">Backup &amp; Restore</div>
+            <div class="sub-tab" data-subtab="updates" onclick="switchTab('updates')">Updates</div>
           </div>
 
           <!-- GENERAL SETTINGS — applies to all templates -->
@@ -1981,8 +2656,11 @@
                 <input type="number" id="cfg_jukebox_queue_depth" min="0" max="100" onchange="saveSetting('jukebox_queue_depth', this.value)" />
               </div>
               <div>
-                <label for="cfg_jukebox_sequence_request_limit">Max requests per viewer per round</label>
+                <label for="cfg_jukebox_sequence_request_limit">Max copies of the same song in queue</label>
                 <input type="number" id="cfg_jukebox_sequence_request_limit" min="0" max="20" onchange="saveSetting('jukebox_sequence_request_limit', this.value)" />
+                <p class="muted" style="font-size: 0.8rem; margin-top: 0.25rem;">
+                  Counts pending requests for the same song across all viewers. Set to 0 for unlimited.
+                </p>
               </div>
             </div>
             <div class="row" style="margin-top: 0.75rem; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
@@ -1994,6 +2672,14 @@
               <label for="cfg_viewer_request_limit" style="margin: 0;">pending request(s) at a time</label>
             </div>
             <div class="row">
+              <input type="checkbox" id="cfg_block_request_currently_playing" onchange="saveSetting('block_request_currently_playing', this.checked ? 1 : 0)" />
+              <label for="cfg_block_request_currently_playing" style="margin: 0;">Block requests for the song that's currently playing</label>
+            </div>
+            <div class="row">
+              <input type="checkbox" id="cfg_block_request_next_up" onchange="saveSetting('block_request_next_up', this.checked ? 1 : 0)" />
+              <label for="cfg_block_request_next_up" style="margin: 0;">Block requests for the song that's already up next</label>
+            </div>
+            <div class="row">
               <input type="checkbox" id="cfg_hide_sequence_after_played" onchange="saveSetting('hide_sequence_after_played', this.checked ? 1 : 0)" />
               <label for="cfg_hide_sequence_after_played" style="margin: 0;">Hide sequence from list after played</label>
             </div>
@@ -2002,12 +2688,199 @@
           <!-- VOTING SETTINGS -->
           <div class="sub-tab-pane" data-subtab="voting">
             <div class="row">
-              <input type="checkbox" id="cfg_prevent_multiple_votes" onchange="saveSetting('prevent_multiple_votes', this.checked ? 1 : 0)" />
+              <input type="checkbox" id="cfg_prevent_multiple_votes" onchange="saveSetting('prevent_multiple_votes', this.checked ? 1 : 0); updateAllowVoteChangeVisibility();" />
               <label for="cfg_prevent_multiple_votes" style="margin: 0;">Limit each viewer to one vote per round</label>
+            </div>
+            <div class="row" id="cfg_allow_vote_change_row" style="margin-left: 1.5rem;">
+              <input type="checkbox" id="cfg_allow_vote_change" onchange="saveSetting('allow_vote_change', this.checked ? 1 : 0)" />
+              <label for="cfg_allow_vote_change" style="margin: 0;">Let viewers change their vote (still 1 vote each — clicking another song moves it)</label>
             </div>
             <div class="row">
               <input type="checkbox" id="cfg_reset_votes_after_round" onchange="saveSetting('reset_votes_after_round', this.checked ? 1 : 0)" />
               <label for="cfg_reset_votes_after_round" style="margin: 0;">Auto-reset votes after winner plays</label>
+            </div>
+            <div class="row">
+              <input type="checkbox" id="cfg_block_vote_currently_playing" onchange="saveSetting('block_vote_currently_playing', this.checked ? 1 : 0)" />
+              <label for="cfg_block_vote_currently_playing" style="margin: 0;">Block votes for the song that's currently playing</label>
+            </div>
+            <div class="row">
+              <input type="checkbox" id="cfg_block_vote_next_up" onchange="saveSetting('block_vote_next_up', this.checked ? 1 : 0)" />
+              <label for="cfg_block_vote_next_up" style="margin: 0;">Block votes for the song that's already winning</label>
+            </div>
+
+            <h3 style="margin-top: 1.25rem;">Tiebreak</h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
+              When enabled, a strict tie at the top of the vote count
+              triggers a tiebreak round — viewers see an urgent banner
+              listing the tied songs and have a limited window to vote
+              again. If the timer expires without a clear winner,
+              all votes for that round are dumped and FPP plays its
+              scheduled next song.
+              <br /><br />
+              Disabled by default; without this, ties are broken by
+              "earliest first vote wins."
+            </p>
+            <div class="row">
+              <input type="checkbox" id="cfg_tiebreak_enabled" onchange="saveSetting('tiebreak_enabled', this.checked ? 1 : 0)" />
+              <label for="cfg_tiebreak_enabled" style="margin: 0;">Enable tiebreak round on a tie</label>
+            </div>
+            <div class="row" style="margin-top: 0.5rem; gap: 0.5rem; align-items: center;">
+              <label for="cfg_tiebreak_duration_sec" style="margin: 0;">Tiebreak duration (seconds):</label>
+              <input type="number" id="cfg_tiebreak_duration_sec" min="10" max="600" step="5"
+                     onchange="saveSetting('tiebreak_duration_sec', parseInt(this.value, 10) || 60)"
+                     style="max-width: 120px;" />
+              <span class="muted" style="font-size: 0.8rem;">— typical: 30–90s</span>
+            </div>
+          </div>
+
+          <!-- AUDIO -->
+          <!-- All audio-related settings live here. Previously these were
+               scattered: distance gate + sync offset were in safeguards
+               (where they didn't belong), and external access + cache had
+               their own top-level cards below the Settings card. Grouping
+               them in one sub-tab makes audio tuning a single place to go. -->
+          <div class="sub-tab-pane" data-subtab="audio">
+            <h3>Audio enabled</h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
+              Master switch for ShowPilot's built-in audio. Turn off if you
+              deliver audio externally (PulseMesh, FM transmitter, Icecast)
+              and don't want ShowPilot to host audio at all. When disabled:
+              the listen-on-phone button is hidden from viewers, audio
+              streaming endpoints are turned off, and the FPP plugin skips
+              uploading audio files entirely (saves disk space and sync time).
+              Other audio settings below have no effect when this is off.
+            </p>
+            <div class="row">
+              <input type="checkbox" id="cfg_audio_enabled" onchange="saveSetting('audio_enabled', this.checked ? 1 : 0); updateAudioEnabledVisibility();" />
+              <label for="cfg_audio_enabled" style="margin: 0;">Enable audio playback in ShowPilot</label>
+            </div>
+
+            <div id="cfg_audio_subsection" style="margin-top: 1.5rem;">
+            <h3>Audio distance gate <span class="muted" style="font-size: 0.8rem; font-weight: normal;">(copyright safety)</span></h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
+              When enabled, viewers must be physically near your show to listen.
+              Tapping the 🎧 button forces a fresh GPS check at click time —
+              cached location from earlier in the day or a different location won't bypass it.
+              Location is also re-verified every 15 minutes during playback,
+              so a viewer who walks away will be cut off automatically.
+              Recommended for shows playing licensed/copyrighted music.
+              Leave disabled if you only play original content or have streaming rights.
+              Uses the show coordinates set in Interaction Safeguards.
+            </p>
+            <div class="row">
+              <input type="checkbox" id="cfg_audio_gate_enabled" onchange="saveSetting('audio_gate_enabled', this.checked ? 1 : 0); updateAudioGateVisibility();" />
+              <label for="cfg_audio_gate_enabled" style="margin: 0;">Restrict audio playback to listeners within radius</label>
+            </div>
+            <div class="row" id="cfg_audio_gate_radius_row" style="margin-top: 0.5rem; gap: 0.5rem; align-items: center;">
+              <label for="cfg_audio_gate_radius_miles" style="margin: 0;">Audio radius (miles):</label>
+              <input type="number" id="cfg_audio_gate_radius_miles" step="0.1" min="0.05" max="50"
+                     onchange="saveSetting('audio_gate_radius_miles', this.value)"
+                     style="max-width: 120px;" />
+              <span class="muted" style="font-size: 0.8rem;">— typically smaller than the interaction radius</span>
+            </div>
+            </div>
+
+            <h3 style="margin-top: 1.5rem;">Audio sync offset</h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
+              Adjusts when audio starts playing on listeners' phones relative to
+              the light show. If phones sound ahead of the lights, use a positive
+              value (delays audio). If phones sound behind, use a negative value.
+              Typical range is 0–2000ms. Changes take effect on the next song.
+            </p>
+            <div class="row" style="gap: 0.5rem; align-items: center;">
+              <label for="cfg_audio_sync_offset_ms" style="margin: 0;">Offset (ms):</label>
+              <input type="number" id="cfg_audio_sync_offset_ms" step="50" min="-5000" max="5000"
+                     onchange="saveSetting('audio_sync_offset_ms', parseInt(this.value) || 0)"
+                     style="max-width: 120px;" />
+              <span class="muted" style="font-size: 0.8rem;">— positive = delay audio (phones were ahead); negative = advance audio (phones were behind)</span>
+            </div>
+
+            <h3 style="margin-top: 1.5rem;">External audio access</h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+              Listeners on cellular or away from your home network can't reach your local IP.
+              Set your public domain so the player automatically falls back to it for external listeners.
+              Local listeners still use the direct path for best performance.
+            </p>
+            <div>
+              <label for="cfg_public_base_url">Public base URL (your domain)</label>
+              <input type="text" id="cfg_public_base_url"
+                     placeholder="https://yourdomain.com"
+                     onchange="saveSetting('public_base_url', this.value.trim())"
+                     style="width: 100%; max-width: 400px;" />
+              <p class="muted" style="font-size: 0.8rem; margin: 0.4rem 0 0;">
+                The full URL where this ShowPilot instance is publicly reachable.
+                Leave blank to disable external access.
+              </p>
+            </div>
+          </div>
+
+          <!-- APP — PWA install controls for admin & viewer -->
+          <!-- These let users add ShowPilot to their home screen as a
+               standalone app. Browser-side PWA install is enabled by
+               serving a manifest.json + service worker, gated by these
+               toggles. Disabling the toggle returns 404 on the manifest
+               URL, which makes browsers silently not offer install. -->
+          <div class="sub-tab-pane" data-subtab="app">
+            <h3>Admin app</h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
+              When enabled, the admin page can be installed as a standalone
+              app on supported devices. Uses the ShowPilot favicon as the
+              app icon and "ShowPilot Admin" as the name.
+              <br /><br />
+              On Chrome/Edge desktop and Android: an "Install" prompt becomes
+              available (often a small icon in the address bar).
+              On iOS Safari: use Share → Add to Home Screen.
+            </p>
+            <div class="row">
+              <input type="checkbox" id="cfg_pwa_admin_enabled" onchange="saveSetting('pwa_admin_enabled', this.checked ? 1 : 0)" />
+              <label for="cfg_pwa_admin_enabled" style="margin: 0;">Enable Install as App for admin</label>
+            </div>
+            <div class="row" style="margin-top: 0.5rem; align-items: flex-start; flex-direction: column;">
+              <button type="button" id="pwaInstallBtn" class="secondary"
+                      style="display: inline-flex; gap: 0.5rem; align-items: center;"
+                      onclick="handleAdminInstallClick()">
+                <img src="/admin-icon" alt=""
+                     style="width: 20px; height: 20px; border-radius: 4px; vertical-align: middle;" />
+                <span id="pwaInstallBtnLabel">Install ShowPilot Admin</span>
+              </button>
+              <span id="pwaInstallHint" class="muted" style="font-size: 0.8rem; margin-top: 0.4rem;">
+                Checking install eligibility…
+              </span>
+            </div>
+
+            <h3 style="margin-top: 1.5rem;">Viewer app</h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
+              When enabled, viewers can install your show page as an app
+              on their devices. Customize the name and icon below.
+            </p>
+            <div class="row">
+              <input type="checkbox" id="cfg_pwa_viewer_enabled" onchange="saveSetting('pwa_viewer_enabled', this.checked ? 1 : 0)" />
+              <label for="cfg_pwa_viewer_enabled" style="margin: 0;">Enable Install as App for viewer</label>
+            </div>
+            <div style="margin-top: 0.75rem;">
+              <label for="cfg_pwa_viewer_name">App name</label>
+              <input type="text" id="cfg_pwa_viewer_name" maxlength="60"
+                     placeholder="Defaults to your show name"
+                     onchange="saveSetting('pwa_viewer_name', this.value)" />
+              <p class="muted" style="font-size: 0.8rem; margin: 0.25rem 0 0;">
+                What viewers see under the app icon on their home screen.
+                Leave blank to use your show name. Keep it short — long
+                names get truncated by the OS.
+              </p>
+            </div>
+            <div style="margin-top: 0.75rem;">
+              <label>App icon</label>
+              <div class="row" style="gap: 0.5rem; align-items: center; margin-top: 0.25rem;">
+                <input type="file" id="pwaViewerIconFile" accept="image/png,image/jpeg" />
+                <button type="button" class="secondary" onclick="clearPwaViewerIcon()">Clear</button>
+              </div>
+              <p class="muted" style="font-size: 0.8rem; margin: 0.25rem 0 0;">
+                Recommended: a square PNG, 512×512 or larger. Browsers will
+                downscale for various display contexts. Max ~200KB.
+              </p>
+              <div id="pwaViewerIconPreview" style="margin-top: 0.5rem;">
+                <span class="muted" style="font-size: 0.8rem;">No icon set — viewers will see the ShowPilot favicon.</span>
+              </div>
             </div>
           </div>
 
@@ -2016,10 +2889,36 @@
             <h3>PSA injection</h3>
             <div class="row">
               <input type="checkbox" id="cfg_play_psa_enabled" onchange="saveSetting('play_psa_enabled', this.checked ? 1 : 0)" />
-              <label for="cfg_play_psa_enabled" style="margin: 0;">Inject PSA every N interactions</label>
+              <label for="cfg_play_psa_enabled" style="margin: 0;">Inject PSAs into the show</label>
             </div>
+            <p class="muted" style="font-size: 0.85rem; margin: 0.5rem 0 1rem;">
+              Periodically replaces a played sequence with a "PSA" sequence — useful for tip-jar reminders,
+              FM frequency callouts, safety messages, sponsor mentions. Mark a sequence as a PSA in the
+              Sequences tab. The least-recently-played PSA is chosen each time.
+            </p>
+
+            <label for="cfg_psa_trigger_mode" style="margin-top: 0.5rem;">When to fire</label>
+            <select id="cfg_psa_trigger_mode" onchange="onPsaTriggerModeChange(this.value)" style="max-width: 360px;">
+              <option value="interactions">After every N viewer interactions (votes / requests)</option>
+              <option value="sequences">After every N sequences FPP plays</option>
+            </select>
+            <!-- Two side-by-side help blocks; only one shows based on the selected mode.
+                 Concrete descriptions of what each mode means in practice — operators
+                 picked the wrong one historically because "every 5" was ambiguous. -->
+            <div id="psaModeHelp_interactions" class="muted" style="font-size: 0.85rem; margin: 0.4rem 0 1rem; padding: 0.6rem 0.8rem; background: var(--surface-elevated); border-radius: 6px;">
+              <strong>Interactions mode.</strong> The counter ticks up each time a viewer votes or makes a jukebox
+              request. After <em>N</em> of those, the next viewer-driven play is replaced with a PSA. Best for
+              shows where most plays are viewer-driven. <strong>If nobody is voting or requesting, PSAs never fire.</strong>
+            </div>
+            <div id="psaModeHelp_sequences" class="muted" style="font-size: 0.85rem; margin: 0.4rem 0 1rem; padding: 0.6rem 0.8rem; background: var(--surface-elevated); border-radius: 6px; display: none;">
+              <strong>Sequences mode.</strong> The counter ticks up each time FPP plays a sequence (PSAs themselves
+              don't count). After <em>N</em> sequences, the next plugin poll receives a PSA to play. Fires regardless
+              of viewer activity — best for schedule-driven shows that want regular sponsor or safety
+              reminders even when no one is voting.
+            </div>
+
             <div class="row">
-              <label for="cfg_psa_frequency" style="margin: 0;">Frequency (interactions between PSAs):</label>
+              <label for="cfg_psa_frequency" style="margin: 0;"><span id="cfg_psa_frequency_label">Frequency (interactions between PSAs):</span></label>
               <input type="number" id="cfg_psa_frequency" min="1" max="100" style="max-width: 100px;" onchange="saveSetting('psa_frequency', this.value)" />
             </div>
 
@@ -2069,32 +2968,24 @@
               </div>
             </div>
 
+            <h3>Location code</h3>
+            <div class="row">
+              <input type="checkbox" id="cfg_location_code_enabled" onchange="saveSetting('location_code_enabled', this.checked ? 1 : 0)" />
+              <label for="cfg_location_code_enabled" style="margin: 0;">Require viewers to enter a code to interact</label>
+            </div>
+            <p class="muted" style="font-size: 0.85rem; margin: 0.5rem 0 1rem;">
+              Viewers must enter the code displayed in your yard before they can vote or make jukebox requests.
+              Add <code>{location-code-dynamic-container}</code> and <code>{LOCATION_CODE}</code> to your viewer template to show the input field.
+            </p>
+            <div>
+              <label for="cfg_location_code">Access code</label>
+              <input type="text" id="cfg_location_code" style="max-width: 240px;" placeholder="e.g. 1234"
+                     onchange="saveSetting('location_code', this.value)" />
+            </div>
+
             <h3>IP blocking</h3>
             <label for="cfg_blocked_ips">Blocked IPs (comma-separated, supports CIDR)</label>
             <textarea id="cfg_blocked_ips" rows="3" placeholder="e.g. 1.2.3.4, 10.0.0.0/24" onchange="saveSetting('blocked_ips', this.value)"></textarea>
-
-            <h3 style="margin-top: 1.25rem;">Audio distance gate <span class="muted" style="font-size: 0.8rem; font-weight: normal;">(copyright safety)</span></h3>
-            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
-              When enabled, viewers must be physically near your show to listen.
-              Tapping the 🎧 button forces a fresh GPS check at click time —
-              cached location from earlier in the day or a different location won't bypass it.
-              Location is also re-verified every 15 minutes during playback,
-              so a viewer who walks away will be cut off automatically.
-              Recommended for shows playing licensed/copyrighted music.
-              Leave disabled if you only play original content or have streaming rights.
-              Uses the same Show coordinates set above.
-            </p>
-            <div class="row">
-              <input type="checkbox" id="cfg_audio_gate_enabled" onchange="saveSetting('audio_gate_enabled', this.checked ? 1 : 0); updateAudioGateVisibility();" />
-              <label for="cfg_audio_gate_enabled" style="margin: 0;">Restrict audio playback to listeners within radius</label>
-            </div>
-            <div class="row" id="cfg_audio_gate_radius_row" style="margin-top: 0.5rem; gap: 0.5rem; align-items: center;">
-              <label for="cfg_audio_gate_radius_miles" style="margin: 0;">Audio radius (miles):</label>
-              <input type="number" id="cfg_audio_gate_radius_miles" step="0.1" min="0.05" max="50"
-                     onchange="saveSetting('audio_gate_radius_miles', this.value)"
-                     style="max-width: 120px;" />
-              <span class="muted" style="font-size: 0.8rem;">— typically smaller than the interaction radius</span>
-            </div>
 
             <h3 style="margin-top: 1.25rem;">View-source deterrent <span class="muted" style="font-size: 0.8rem; font-weight: normal;">(template protection)</span></h3>
             <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.5rem;">
@@ -2116,27 +3007,180 @@
               <label for="cfg_viewer_source_obfuscate" style="margin: 0;">Enable view-source deterrent on viewer page</label>
             </div>
           </div>
-        </div>
 
-        <div class="card">
-          <h2>External Audio Access</h2>
-          <p class="muted" style="font-size: 0.9rem; margin: 0.5rem 0 1rem;">
-            Listeners on cellular or away from your home network can't reach your local IP.
-            Set your public domain so the player automatically falls back to it for external listeners.
-            Local listeners still use the direct path for best performance.
-          </p>
-          <div>
-            <label for="cfg_public_base_url">Public base URL (your domain)</label>
-            <input type="text" id="cfg_public_base_url"
-                   placeholder="https://yourdomain.com"
-                   onchange="saveSetting('public_base_url', this.value.trim())"
-                   style="width: 100%; max-width: 400px;" />
-            <p class="muted" style="font-size: 0.8rem; margin: 0.4rem 0 0;">
-              The full URL where this ShowPilot instance is publicly reachable.
-              Leave blank to disable external access.
+          <!-- PUBLIC ACCESS — Cloudflare Tunnel (v0.29.0+; moved here from
+               Plugin tab in v0.30.2). Lets the operator share their show
+               with friends/neighbors over the internet without port
+               forwarding. No Cloudflare account is required from us — the
+               operator brings their own free CF account and pastes a tunnel
+               token.
+
+               Implementation note: main runs cloudflared as a managed CHILD
+               PROCESS (not a systemd service like Lite does), because main
+               also runs in Docker where systemd isn't available. The lifecycle
+               is tied to ShowPilot's process — when ShowPilot stops, the
+               tunnel stops too. -->
+          <div class="sub-tab-pane" data-subtab="public-access">
+            <div class="card card-accent-purple">
+              <div class="row" style="justify-content: space-between; align-items: center; margin: 0 0 0.5rem;">
+                <h2 style="margin: 0;">Public Access (Cloudflare Tunnel)</h2>
+                <span id="cfStatusPill" class="pill pill-neutral">Loading…</span>
+              </div>
+              <p class="muted" style="font-size: 0.9rem; margin: 0 0 1rem;">
+                Share your show with anyone on the internet — no port forwarding, no static IP, no domain rewiring on your router.
+                You bring your own free Cloudflare account; ShowPilot runs the tunnel for you.
+              </p>
+
+              <!-- Detected info row -->
+              <div class="grid-2" style="margin-bottom: 1rem;">
+                <div>
+                  <label>Status</label>
+                  <div id="cfStateLine" class="muted">—</div>
+                </div>
+                <div>
+                  <label>Architecture</label>
+                  <div id="cfArchLine" class="muted">—</div>
+                </div>
+              </div>
+
+              <!-- STATE A: cloudflared not installed -->
+              <div id="cfStateNotInstalled" style="display: none;">
+                <p style="margin: 0 0 0.75rem;">
+                  <strong>Step 1 — install the tunnel runtime.</strong>
+                  This downloads the <code>cloudflared</code> binary from Cloudflare's official GitHub releases into ShowPilot's data directory.
+                  Takes about 30 seconds on most networks.
+                </p>
+                <button onclick="cfInstall()" id="cfInstallBtn">Install Cloudflare Tunnel</button>
+                <div id="cfInstallStatus" class="muted" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
+              </div>
+
+              <!-- STATE B: installed, no token configured -->
+              <div id="cfStateNeedsToken" style="display: none;">
+                <p style="margin: 0 0 0.75rem;">
+                  <strong>Step 2 — connect a Cloudflare tunnel.</strong>
+                  You'll need a free Cloudflare account.
+                  <a href="#" onclick="cfToggleHelp(event)">Show me how →</a>
+                </p>
+
+                <div id="cfHelp" style="display: none; background: var(--surface-elevated); border-radius: 8px; padding: 1rem; margin: 0 0 1rem; font-size: 0.9rem;">
+                  <ol style="margin: 0; padding-left: 1.25rem;">
+                    <li style="margin-bottom: 0.5rem;">Sign in (or sign up) at <a href="https://one.dash.cloudflare.com" target="_blank" rel="noopener">one.dash.cloudflare.com</a>. Add a domain to your Cloudflare account if you don't have one yet — Cloudflare also sells domains for ~$10/year if you need one just for this.</li>
+                    <li style="margin-bottom: 0.5rem;">Go to <strong>Networks → Tunnels</strong> and click <strong>Create a tunnel</strong>. Choose the <strong>Cloudflared</strong> connector type and name it anything (e.g. <em>my-light-show</em>).</li>
+                    <li style="margin-bottom: 0.5rem;">On the next screen, copy the <strong>token</strong> from the install command. The token is the long string after <code>--token</code>. <em>Don't run any commands</em> — just copy the token.</li>
+                    <li style="margin-bottom: 0.5rem;">Click <strong>Next</strong>, then on the <strong>Public Hostname</strong> page: pick a subdomain (e.g. <code>show</code>), pick your domain, and set <strong>Service</strong> to <code>HTTP</code> with URL <code>127.0.0.1:3100</code> (or whatever port your ShowPilot is on). Save.</li>
+                    <li>Paste the token below and click <strong>Save Token</strong>. Your show is now live at the hostname you configured.</li>
+                  </ol>
+                  <p class="muted" style="margin: 0.75rem 0 0;">
+                    <strong>Recommended:</strong> protect your <code>/admin</code> path with Cloudflare Access (free for up to 50 users) so only you can reach the admin panel. Your viewers don't need it; only you do.
+                  </p>
+                </div>
+
+                <label for="cfTokenInput">Tunnel token</label>
+                <input type="password" id="cfTokenInput" placeholder="eyJhIjoiYWJjMTIzZGVmNDU2..." autocomplete="off" />
+                <p class="muted" style="font-size: 0.8rem; margin: 0.25rem 0 0.75rem;">
+                  Treat this like a password. Anyone with the token can connect to your tunnel.
+                </p>
+                <div class="row" style="gap: 0.5rem;">
+                  <button onclick="cfSaveToken()" id="cfSaveTokenBtn">Save Token &amp; Start Tunnel</button>
+                  <button class="secondary" onclick="cfUninstall()">Uninstall</button>
+                </div>
+                <div id="cfTokenStatus" class="muted" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
+              </div>
+
+              <!-- STATE C: configured (running or stopped) -->
+              <div id="cfStateConfigured" style="display: none;">
+                <p style="margin: 0 0 0.75rem;">
+                  Your tunnel is configured. The public URL is whatever hostname you set up in your Cloudflare dashboard.
+                </p>
+                <div class="row" style="gap: 0.5rem; flex-wrap: wrap;">
+                  <button onclick="cfStart()"   id="cfStartBtn"   style="display: none;">Start Tunnel</button>
+                  <button onclick="cfStop()"    id="cfStopBtn"    class="secondary" style="display: none;">Stop Tunnel</button>
+                  <button onclick="cfRestart()" id="cfRestartBtn" class="secondary">Restart</button>
+                  <button onclick="cfReplaceToken()"               class="secondary">Replace Token</button>
+                  <button onclick="cfShowLogs()"                   class="secondary">View Logs</button>
+                  <button onclick="cfUninstall()"                  class="secondary">Uninstall</button>
+                </div>
+                <div id="cfControlStatus" class="muted" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
+              </div>
+
+              <!-- LOGS — toggled by View Logs button. Also shown automatically
+                   when the tunnel is running but not yet "connected" — useful
+                   for diagnosing why a freshly-pasted token isn't connecting. -->
+              <div id="cfLogsBlock" style="display: none; margin-top: 1rem;">
+                <label>Recent tunnel logs</label>
+                <pre id="cfLogsPre" style="max-height: 280px; overflow: auto; background: var(--surface-elevated); padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; line-height: 1.4; margin: 0;"></pre>
+                <div class="row" style="gap: 0.5rem; margin-top: 0.5rem;">
+                  <button class="secondary" onclick="cfShowLogs()">Refresh</button>
+                  <button class="secondary" onclick="document.getElementById('cfLogsBlock').style.display='none'">Hide</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- BACKUP & RESTORE — full instance backup including DB, config.js, optional cover art -->
+          <div class="sub-tab-pane" data-subtab="backup">
+            <h3>Export configuration</h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+              Downloads a single JSON file containing your settings, sequences,
+              templates, users, and the secrets needed to migrate to another
+              ShowPilot instance. Useful for backups before major changes,
+              or for moving to a new server.
             </p>
+            <div style="display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.75rem;">
+              <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; margin: 0; cursor: pointer;">
+                <input type="checkbox" id="exportIncludeCoverArt" style="width: auto; margin: 0;" />
+                <span>Include cover-art images</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; margin: 0; cursor: pointer;"
+                     title="Includes last_played_at and play counters per sequence. Useful when migrating servers and you want to preserve play history.">
+                <input type="checkbox" id="exportIncludeStats" style="width: auto; margin: 0;" />
+                <span>Include play stats</span>
+              </label>
+            </div>
+            <button onclick="downloadBackup()">Download backup</button>
+            <div id="exportStatus" class="muted" style="margin-top: 0.75rem; font-size: 0.85rem;"></div>
+
+            <h3 style="margin-top: 2rem;">Restore from backup</h3>
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+              Upload a previously-exported backup. You'll see a comparison of what's
+              in the backup vs your current data, and pick what to do per section
+              (replace, merge, or skip). Restoring secrets will end all current
+              admin sessions and trigger a server restart.
+            </p>
+            <input type="file" id="restoreFileInput" accept="application/json,.json"
+                   class="sp-file-input"
+                   onchange="onRestoreFileSelected(event)" />
+            <div id="restoreStatus" class="muted" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
+
+            <!-- The inspect/policies UI gets injected here -->
+            <div id="restorePoliciesArea" style="display: none; margin-top: 1rem;"></div>
+          </div>
+
+          <!-- UPDATES — in-app update from GitHub releases (v0.33.0+) -->
+          <div class="sub-tab-pane" data-subtab="updates">
+            <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+              Pull the latest release of ShowPilot from GitHub and apply it
+              automatically. Your data and config are preserved. A snapshot
+              of <code>data/</code> is taken before each update so you can
+              roll back if needed.
+            </p>
+
+            <div id="updateStatusBox" style="padding: 0.75rem; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 0.75rem;">
+              <div class="muted" style="font-size: 0.8rem;">Loading update status…</div>
+            </div>
+
+            <div id="updateActionRow" style="display: none; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+              <button id="updateCheckBtn" class="secondary" onclick="checkForUpdates()">Check for updates</button>
+              <button id="updateApplyBtn" onclick="applyUpdate()" style="display: none;">Update now</button>
+              <button id="updateRollbackBtn" class="secondary" onclick="rollbackUpdate()" style="display: none;">Roll back to previous version</button>
+            </div>
+
+            <div id="updateActionStatus" class="muted" style="margin-top: 0.75rem; font-size: 0.85rem;"></div>
           </div>
         </div>
+
+        <!-- BACKUP & RESTORE pane is inside the Settings card above. -->
+        <!-- External Audio Access lives inside the Audio sub-tab. -->
       </div>
 
       <!-- ============================================================
@@ -2370,6 +3414,10 @@
     const ALL_THEMES = ['stage-dark', 'stage-light', 'christmas', 'halloween', 'easter', 'stpatricks', 'independence', 'valentines'];
     const LIGHT_THEMES = new Set(['stage-light', 'easter']);
 
+    // applyTheme: display-only. Updates DOM/Monaco/charts to reflect a
+    // theme. Caches in localStorage so the next page load can apply the
+    // theme before /me returns (avoids a flash of the wrong theme).
+    // Does NOT push to the server — that's setTheme's job.
     function applyTheme(theme) {
       const body = document.body;
       ALL_THEMES.forEach(t => body.classList.remove('theme-' + t));
@@ -2393,10 +3441,45 @@
         } catch { /* charts not ready yet */ }
       }, 0);
     }
+    // setTheme: user-driven theme change from the dropdown. Applies +
+    // persists to the server so the choice follows the user across
+    // devices. Failure to persist is logged but doesn't undo the local
+    // change — better to keep the visible theme they picked and let them
+    // retry than to spring back to the old one after a network blip.
+    async function setTheme(theme) {
+      applyTheme(theme);
+      try {
+        const r = await api('/me/theme', { method: 'PUT', body: JSON.stringify({ theme }) });
+        if (!r.ok) console.warn('Failed to save theme to server:', r.error || r.status);
+      } catch (e) {
+        console.warn('Failed to save theme to server:', e);
+      }
+    }
     (function initTheme() {
       const saved = localStorage.getItem('showpilot_theme') || 'stage-dark';
       applyTheme(saved);
     })();
+
+    // syncThemeWithServer: called after /me succeeds. Three cases:
+    //   1. Server has a theme → apply it (overrides localStorage). This
+    //      is how the choice follows you to a new device.
+    //   2. Server has no theme but localStorage does → push localStorage
+    //      up so this user's existing choice carries forward. One-time
+    //      migration; from then on the server is the source of truth.
+    //   3. Neither has anything → leave the default in place.
+    async function syncThemeWithServer(meData) {
+      if (!meData) return;
+      const serverTheme = meData.theme;
+      const localTheme = localStorage.getItem('showpilot_theme');
+      if (serverTheme && ALL_THEMES.includes(serverTheme)) {
+        if (serverTheme !== localTheme) applyTheme(serverTheme);
+        return;
+      }
+      if (localTheme && ALL_THEMES.includes(localTheme)) {
+        try { await api('/me/theme', { method: 'PUT', body: JSON.stringify({ theme: localTheme }) }); }
+        catch (e) { /* migration is best-effort; we'll try again next login */ }
+      }
+    }
 
     // ============================================================
     // MAIN TAB SWITCHER
@@ -2428,12 +3511,276 @@
     function copyShowToken() {
       const t = document.getElementById('showToken').textContent;
       if (!t || t === '—') return;
-      navigator.clipboard.writeText(t).then(() => {
-        const s = document.getElementById('copyTokenStatus');
+      const s = document.getElementById('copyTokenStatus');
+      function onSuccess() {
         s.textContent = '✓ Copied to clipboard';
         s.style.color = 'var(--status-success)';
         setTimeout(() => { s.textContent = ''; }, 2000);
-      });
+      }
+      function onFail() {
+        // Fallback for HTTP (non-localhost) or when clipboard permission is denied
+        try {
+          const el = document.createElement('textarea');
+          el.value = t;
+          el.style.position = 'fixed';
+          el.style.opacity = '0';
+          document.body.appendChild(el);
+          el.select();
+          document.execCommand('copy');
+          document.body.removeChild(el);
+          onSuccess();
+        } catch (e) {
+          s.textContent = 'Copy failed — select the token manually';
+          s.style.color = 'var(--status-error)';
+          setTimeout(() => { s.textContent = ''; }, 3000);
+        }
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(t).then(onSuccess).catch(onFail);
+      } else {
+        onFail();
+      }
+    }
+
+    // ============================================================
+    // Cloudflare Tunnel (Public Access) — v0.29.0+
+    // ============================================================
+    // The card has three primary states (not-installed, needs-token,
+    // configured) and surfaces "running but not yet connected" by
+    // auto-opening the logs panel. Polling is only active during
+    // long-running ops (install, token save) so the idle case doesn't
+    // burn cycles.
+
+    let cfPollTimer = null;
+
+    function cfSetStatusMessage(elId, text, kind) {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      el.textContent = text || '';
+      el.style.color =
+        kind === 'success' ? 'var(--status-success)' :
+        kind === 'error'   ? 'var(--status-danger)'  :
+        '';
+    }
+
+    function cfToggleHelp(ev) {
+      if (ev) ev.preventDefault();
+      const h = document.getElementById('cfHelp');
+      h.style.display = (h.style.display === 'none' || !h.style.display) ? 'block' : 'none';
+    }
+
+    async function loadCloudflaredStatus() {
+      try {
+        const r = await fetch('/api/admin/cloudflared/status', { credentials: 'include' });
+        if (!r.ok) return;
+        const s = await r.json();
+        cfApplyStatus(s);
+      } catch (err) {
+        // Silent on the polling path. Manual actions surface their own errors.
+      }
+    }
+
+    function cfApplyStatus(s) {
+      // Header pill
+      const pill = document.getElementById('cfStatusPill');
+      pill.classList.remove('pill-success', 'pill-warning', 'pill-danger', 'pill-neutral');
+      if (s.running && s.connected) {
+        pill.classList.add('pill-success');
+        pill.textContent = 'Tunnel Online';
+      } else if (s.running) {
+        pill.classList.add('pill-warning');
+        pill.textContent = 'Connecting…';
+      } else if (s.hasToken) {
+        pill.classList.add('pill-warning');
+        pill.textContent = 'Stopped';
+      } else if (s.installed) {
+        pill.classList.add('pill-warning');
+        pill.textContent = 'Needs Token';
+      } else {
+        pill.classList.add('pill-neutral');
+        pill.textContent = 'Not Installed';
+      }
+
+      // Detected info row
+      document.getElementById('cfStateLine').textContent =
+        (s.running && s.connected) ? 'Running and forwarding traffic to localhost'
+        : s.running                  ? `Process running (attempt ${s.respawnAttempts || 1}); waiting for connection registration…`
+        : s.hasToken                 ? 'Token saved, tunnel stopped'
+        : s.installed                ? `Installed (${s.version || 'version unknown'}), waiting for tunnel token`
+        : 'Cloudflare Tunnel runtime is not installed';
+
+      const archStr =
+        !s.archSupported && s.platform !== 'linux' ? `${s.platform} ${s.arch || '?'} (unsupported — Linux only)` :
+        s.archSupported                            ? `${s.arch} (supported)` :
+        s.arch                                     ? `${s.arch} (unsupported)` :
+        'Unknown architecture';
+      document.getElementById('cfArchLine').textContent = archStr;
+
+      // State panel visibility
+      const setShow = (id, show) => { document.getElementById(id).style.display = show ? '' : 'none'; };
+      setShow('cfStateNotInstalled', !s.installed);
+      setShow('cfStateNeedsToken',    s.installed && !s.hasToken);
+      setShow('cfStateConfigured',    s.installed &&  s.hasToken);
+
+      if (s.installed && s.hasToken) {
+        setShow('cfStartBtn', !s.running);
+        setShow('cfStopBtn',   s.running);
+      }
+
+      // Disable install button on unsupported platforms
+      const installBtn = document.getElementById('cfInstallBtn');
+      if (installBtn) {
+        installBtn.disabled = !s.archSupported || s.platform !== 'linux';
+        if (!s.archSupported || s.platform !== 'linux') {
+          cfSetStatusMessage('cfInstallStatus',
+            s.platform !== 'linux'
+              ? 'Cloudflare Tunnel only works on Linux hosts.'
+              : 'This host\'s architecture is not supported by Cloudflare\'s prebuilt cloudflared binaries.',
+            'error');
+        }
+      }
+
+      // If the tunnel is running but not yet connected, auto-show logs so
+      // the operator sees what's happening (most often: invalid token,
+      // hostname not configured in CF dashboard, etc.).
+      if (s.running && !s.connected && s.respawnAttempts > 0) {
+        const block = document.getElementById('cfLogsBlock');
+        if (block.style.display === 'none') cfShowLogs();
+      }
+    }
+
+    function cfStartPolling(intervalMs = 2000, maxDurationMs = 60000) {
+      cfStopPolling();
+      const startedAt = Date.now();
+      cfPollTimer = setInterval(() => {
+        if (Date.now() - startedAt > maxDurationMs) {
+          cfStopPolling();
+          return;
+        }
+        loadCloudflaredStatus();
+      }, intervalMs);
+    }
+    function cfStopPolling() {
+      if (cfPollTimer) { clearInterval(cfPollTimer); cfPollTimer = null; }
+    }
+
+    async function cfInstall() {
+      const btn = document.getElementById('cfInstallBtn');
+      btn.disabled = true;
+      cfSetStatusMessage('cfInstallStatus', 'Downloading cloudflared… (this can take 30–60 seconds)', 'info');
+      try {
+        const r = await fetch('/api/admin/cloudflared/install', { method: 'POST', credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) {
+          cfSetStatusMessage('cfInstallStatus', 'Install failed: ' + (j.error || 'unknown error'), 'error');
+        } else {
+          cfSetStatusMessage('cfInstallStatus',
+            j.alreadyInstalled ? 'Already installed.' : 'Installed successfully. Now paste your tunnel token below.',
+            'success');
+        }
+      } catch (err) {
+        cfSetStatusMessage('cfInstallStatus', 'Network error: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        loadCloudflaredStatus();
+      }
+    }
+
+    async function cfSaveToken() {
+      const tokenInput = document.getElementById('cfTokenInput');
+      const token = tokenInput.value;
+      if (!token || token.trim().length < 20) {
+        cfSetStatusMessage('cfTokenStatus', 'Please paste a valid tunnel token.', 'error');
+        return;
+      }
+      const btn = document.getElementById('cfSaveTokenBtn');
+      btn.disabled = true;
+      cfSetStatusMessage('cfTokenStatus', 'Saving token and starting tunnel…', 'info');
+      try {
+        const r = await fetch('/api/admin/cloudflared/token', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: token.trim() }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) {
+          cfSetStatusMessage('cfTokenStatus', j.error || 'Token registration failed.', 'error');
+          btn.disabled = false;
+          return;
+        }
+        // Clear the field — never leave the token sitting in DOM.
+        tokenInput.value = '';
+        cfSetStatusMessage('cfTokenStatus', 'Tunnel started. Confirming connection…', 'success');
+        cfStartPolling(1500, 30000);
+      } catch (err) {
+        cfSetStatusMessage('cfTokenStatus', 'Network error: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        loadCloudflaredStatus();
+      }
+    }
+
+    async function cfStart()    { await cfSimpleAction('/api/admin/cloudflared/start',    'Starting tunnel…',   'Tunnel started.'); }
+    async function cfStop()     { await cfSimpleAction('/api/admin/cloudflared/stop',     'Stopping tunnel…',   'Tunnel stopped.'); }
+    async function cfRestart()  { await cfSimpleAction('/api/admin/cloudflared/restart',  'Restarting tunnel…', 'Tunnel restarted.'); }
+
+    async function cfSimpleAction(url, pendingMsg, successMsg) {
+      cfSetStatusMessage('cfControlStatus', pendingMsg, 'info');
+      try {
+        const r = await fetch(url, { method: 'POST', credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) {
+          cfSetStatusMessage('cfControlStatus', j.error || 'Operation failed.', 'error');
+          return;
+        }
+        cfSetStatusMessage('cfControlStatus', successMsg, 'success');
+        setTimeout(loadCloudflaredStatus, 800);
+      } catch (err) {
+        cfSetStatusMessage('cfControlStatus', 'Network error: ' + err.message, 'error');
+      }
+    }
+
+    function cfReplaceToken() {
+      // Just flip back to the token-entry state visually. cfSaveToken
+      // handles the stop-then-restart with the new token.
+      document.getElementById('cfStateConfigured').style.display = 'none';
+      document.getElementById('cfStateNeedsToken').style.display = '';
+      document.getElementById('cfTokenInput').focus();
+    }
+
+    async function cfUninstall() {
+      if (!confirm('Uninstall Cloudflare Tunnel?\n\nThis stops the tunnel, removes the token, and deletes the cloudflared binary. Your tunnel configuration in the Cloudflare dashboard is NOT affected — you can reconnect later by reinstalling and pasting the same token.')) return;
+      try {
+        const r = await fetch('/api/admin/cloudflared/uninstall', { method: 'POST', credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) {
+          alert('Uninstall failed: ' + (j.error || 'unknown error'));
+        }
+      } catch (err) {
+        alert('Network error: ' + err.message);
+      } finally {
+        loadCloudflaredStatus();
+      }
+    }
+
+    async function cfShowLogs() {
+      const block = document.getElementById('cfLogsBlock');
+      const pre = document.getElementById('cfLogsPre');
+      block.style.display = '';
+      pre.textContent = 'Loading…';
+      try {
+        const r = await fetch('/api/admin/cloudflared/logs?n=80', { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) {
+          pre.textContent = '(' + (j.error || 'failed to load logs') + ')';
+          return;
+        }
+        pre.textContent = j.logs || '(no log output yet)';
+        pre.scrollTop = pre.scrollHeight;
+      } catch (err) {
+        pre.textContent = '(network error: ' + err.message + ')';
+      }
     }
 
     // ============================================================
@@ -2595,6 +3942,517 @@
         await showAlert('Clear error: ' + e.message);
       }
     }
+
+    // ============================================================
+    // Backup & Restore (v0.25.0+)
+    // ============================================================
+
+    function downloadBackup() {
+      const includeCoverArt = document.getElementById('exportIncludeCoverArt').checked;
+      const includeStats = document.getElementById('exportIncludeStats').checked;
+      const status = document.getElementById('exportStatus');
+      status.textContent = 'Building backup...';
+      // Simple download via same-origin GET — browser handles save dialog
+      const params = new URLSearchParams();
+      if (includeCoverArt) params.set('coverArt', '1');
+      if (includeStats) params.set('stats', '1');
+      const qs = params.toString();
+      const url = '/api/admin/backup/export' + (qs ? '?' + qs : '');
+      // Use fetch + blob so we can show the size/status; for simple cases
+      // a plain anchor click would work too.
+      fetch(url, { credentials: 'include' })
+        .then(r => {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          // Pull filename from Content-Disposition if present
+          const cd = r.headers.get('Content-Disposition') || '';
+          const m = cd.match(/filename="([^"]+)"/);
+          const filename = m ? m[1] : 'showpilot-backup.json';
+          return r.blob().then(blob => ({ blob, filename }));
+        })
+        .then(({ blob, filename }) => {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+          const sizeMb = (blob.size / 1048576).toFixed(2);
+          status.textContent = `Downloaded ${filename} (${sizeMb} MB)`;
+        })
+        .catch(err => {
+          status.textContent = 'Export failed: ' + err.message;
+          showAlert('Export failed: ' + err.message);
+        });
+    }
+
+    // ============================================================
+    // Settings → Updates (v0.33.0+)
+    // ============================================================
+    // The Updates pane shows current version, latest available version,
+    // and an Update button (or rollback button when previous-version
+    // state exists). Loaded lazily on first switch into the pane to
+    // avoid hitting GitHub on every admin page load — refreshUpdateStatus
+    // hits the cached server-side check, which is itself rate-limited.
+
+    let updatesLoadedOnce = false;
+
+    async function refreshUpdateStatus({ force = false } = {}) {
+      const box = document.getElementById('updateStatusBox');
+      const actionRow = document.getElementById('updateActionRow');
+      const applyBtn = document.getElementById('updateApplyBtn');
+      const rollbackBtn = document.getElementById('updateRollbackBtn');
+
+      if (!box) return;
+      box.innerHTML = '<div class="muted" style="font-size: 0.8rem;">Checking for updates…</div>';
+
+      try {
+        const url = force ? '/api/admin/updates/check' : '/api/admin/updates/status';
+        const r = await fetch(url, {
+          method: force ? 'POST' : 'GET',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+
+        // Build the status header.
+        let statusHtml = '';
+        statusHtml += `<div><strong>Current version:</strong> v${escapeHtml(data.currentVersion)}</div>`;
+        if (data.latestVersion) {
+          statusHtml += `<div><strong>Latest version:</strong> ${escapeHtml(data.latestVersion)}`;
+          if (data.latestRelease && data.latestRelease.url) {
+            statusHtml += ` &middot; <a href="${escapeAttr(data.latestRelease.url)}" target="_blank" rel="noopener">release notes</a>`;
+          }
+          statusHtml += '</div>';
+        } else {
+          statusHtml += '<div class="muted" style="font-size: 0.85rem;">Latest version: unknown';
+          if (data.lastCheckError) {
+            statusHtml += ` (${escapeHtml(data.lastCheckError)})`;
+          }
+          statusHtml += '</div>';
+        }
+
+        // Status pill — up to date / available / unavailable here.
+        if (data.updateAvailable) {
+          statusHtml += `<div style="margin-top: 0.5rem;"><span class="pill pill-warning">Update available</span></div>`;
+        } else if (data.latestVersion) {
+          statusHtml += `<div style="margin-top: 0.5rem;"><span class="pill pill-success">Up to date</span></div>`;
+        }
+
+        // Deployment-specific notes.
+        if (data.isDocker) {
+          statusHtml += `<div class="muted" style="font-size: 0.85rem; margin-top: 0.5rem;">
+            This container is managed by its host (e.g. Watchtower). Updates apply automatically when a new image is published — the in-app updater is disabled here.
+          </div>`;
+        } else if (data.isDemoMode) {
+          statusHtml += `<div class="muted" style="font-size: 0.85rem; margin-top: 0.5rem;">
+            In-app updates are disabled in demo mode.
+          </div>`;
+        }
+
+        if (data.lastCheckAt) {
+          const t = new Date(data.lastCheckAt).toLocaleString();
+          statusHtml += `<div class="muted" style="font-size: 0.75rem; margin-top: 0.5rem;">Last checked: ${escapeHtml(t)}</div>`;
+        }
+
+        box.innerHTML = statusHtml;
+        actionRow.style.display = 'flex';
+
+        // Show/hide the apply button.
+        if (data.updateAvailable && data.updaterAvailable) {
+          applyBtn.style.display = '';
+          applyBtn.textContent = `Update to ${data.latestVersion}`;
+        } else {
+          applyBtn.style.display = 'none';
+        }
+
+        // Show/hide the rollback button.
+        if (data.rollback && data.updaterAvailable) {
+          rollbackBtn.style.display = '';
+          rollbackBtn.textContent = `Roll back to ${data.rollback.previousVersionTag}`;
+        } else {
+          rollbackBtn.style.display = 'none';
+        }
+      } catch (err) {
+        box.innerHTML = `<div style="color: var(--status-danger);">Could not load update status: ${escapeHtml(err.message)}</div>`;
+        actionRow.style.display = 'flex';
+      }
+    }
+
+    async function checkForUpdates() {
+      const status = document.getElementById('updateActionStatus');
+      status.textContent = 'Checking GitHub for the latest release…';
+      try {
+        await refreshUpdateStatus({ force: true });
+        status.textContent = '';
+      } catch (err) {
+        status.textContent = 'Check failed: ' + err.message;
+      }
+    }
+
+    async function applyUpdate(opts) {
+      opts = opts || {};
+      const status = document.getElementById('updateActionStatus');
+      const applyBtn = document.getElementById('updateApplyBtn');
+
+      // Read the latest known tag from the visible button label —
+      // the button text was set by refreshUpdateStatus from server data.
+      // We re-fetch /status to get the exact current latestTag rather
+      // than parsing the button text, to be robust against UI drift.
+      let targetTag;
+      try {
+        const r = await fetch('/api/admin/updates/status', { credentials: 'include' });
+        const data = await r.json();
+        targetTag = data.latestVersion;
+      } catch {
+        status.textContent = 'Could not confirm latest version. Try refreshing.';
+        return;
+      }
+      if (!targetTag) {
+        status.textContent = 'No update is available right now.';
+        return;
+      }
+
+      // Skip the initial confirm when re-entered via "Update anyway" —
+      // the override button has its own (more pointed) confirm dialog.
+      if (!opts.force) {
+        const ok = await showConfirm(`Update ShowPilot to ${targetTag}?\n\nThis will restart the server. Active viewers will reconnect automatically.`);
+        if (!ok) return;
+      }
+
+      applyBtn.disabled = true;
+      status.textContent = 'Applying update — this may take 30–60 seconds. The server will restart when done.';
+
+      try {
+        const r = await fetch('/api/admin/updates/apply', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tag: targetTag, force: !!opts.force }),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          // Pre-flight errors come back with a list to display. Each
+          // entry is {msg, override} — override:true means this was
+          // a soft block (active-show) the operator can bypass; the
+          // UI shows an "Update anyway" button when at least one
+          // error is overridable.
+          if (data.preflightErrors && Array.isArray(data.preflightErrors)) {
+            const items = data.preflightErrors.map(e =>
+              typeof e === 'string' ? { msg: e, override: false } : e
+            );
+            const anyOverridable = items.some(e => e.override);
+            const list = items.map(e => '<li>' + escapeHtml(e.msg) + '</li>').join('');
+            let html = 'Cannot update right now:<ul style="margin: 0.4rem 0 0 1.2rem;">' + list + '</ul>';
+            if (anyOverridable) {
+              html += '<button id="updateForceBtn" class="btn btn-warning" style="margin-top: 0.6rem;">Update anyway</button>';
+            }
+            status.innerHTML = html;
+            if (anyOverridable) {
+              const forceBtn = document.getElementById('updateForceBtn');
+              if (forceBtn) {
+                forceBtn.addEventListener('click', async () => {
+                  const ok2 = await showConfirm('Update while a show is active?\n\nViewers in the middle of voting or the queue will be disrupted.');
+                  if (!ok2) return;
+                  await applyUpdate({ force: true });
+                });
+              }
+            }
+          } else {
+            status.textContent = 'Update failed: ' + (data.error || ('HTTP ' + r.status));
+          }
+          applyBtn.disabled = false;
+          return;
+        }
+        status.textContent = `Update applied. The server is restarting on ${targetTag}. This page will reload in a moment…`;
+        // Wait a few seconds for the new process to come up, then reload.
+        // The server logs an "exiting for supervisor-managed restart"
+        // message ~1.5s after responding, then PM2 brings it back —
+        // typically ready in another 3-5s.
+        setTimeout(() => { location.reload(); }, 8000);
+      } catch (err) {
+        status.textContent = 'Update failed: ' + err.message;
+        applyBtn.disabled = false;
+      }
+    }
+
+    async function rollbackUpdate() {
+      const status = document.getElementById('updateActionStatus');
+      const rollbackBtn = document.getElementById('updateRollbackBtn');
+
+      const ok = await showConfirm(`Roll back to the previous version?\n\nYour data will be restored from the snapshot taken before the last update. The server will restart.`);
+      if (!ok) return;
+
+      rollbackBtn.disabled = true;
+      status.textContent = 'Rolling back — the server will restart when done.';
+
+      try {
+        const r = await fetch('/api/admin/updates/rollback', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          status.textContent = 'Rollback failed: ' + (data.error || ('HTTP ' + r.status));
+          rollbackBtn.disabled = false;
+          return;
+        }
+        status.textContent = data.message + ' This page will reload in a moment…';
+        setTimeout(() => { location.reload(); }, 8000);
+      } catch (err) {
+        status.textContent = 'Rollback failed: ' + err.message;
+        rollbackBtn.disabled = false;
+      }
+    }
+
+    // Tiny HTML escapers — local to this section; prevents the version
+    // strings or release URLs from injecting markup if anything weird
+    // ever comes back from GitHub.
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    function escapeAttr(s) {
+      return escapeHtml(s).replace(/"/g, '&quot;');
+    }
+
+    let pendingBackup = null;  // parsed JSON of the chosen file
+    let pendingSummary = null; // server-side inspect result
+
+    async function onRestoreFileSelected(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const status = document.getElementById('restoreStatus');
+      status.textContent = 'Reading file...';
+      try {
+        const text = await file.text();
+        let parsed;
+        try {
+          parsed = JSON.parse(text);
+        } catch (e) {
+          throw new Error('File is not valid JSON: ' + e.message);
+        }
+        pendingBackup = parsed;
+
+        status.textContent = 'Validating backup...';
+        const r = await fetch('/api/admin/backup/inspect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(parsed),
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + r.status));
+        }
+        pendingSummary = data.summary;
+        status.textContent = '';
+        renderRestorePolicies(pendingSummary);
+      } catch (err) {
+        status.textContent = 'Could not read backup: ' + err.message;
+        document.getElementById('restorePoliciesArea').style.display = 'none';
+        pendingBackup = null;
+        pendingSummary = null;
+      }
+    }
+
+    function renderRestorePolicies(summary) {
+      const area = document.getElementById('restorePoliciesArea');
+      const sections = ['config', 'sequences', 'templates', 'users'];
+      const sectionLabels = {
+        config: 'Settings',
+        sequences: 'Sequences',
+        templates: 'Templates',
+        users: 'Admin users',
+      };
+      // For each section, build a small panel showing counts + radio policy.
+      // Config has only replace/skip (single-row table; no merge concept).
+      let sectionsHtml = '';
+      for (const s of sections) {
+        const info = summary.sections[s] || {};
+        const showMerge = s !== 'config';
+        const defaultPolicy = s === 'config' ? 'replace' : 'merge';
+        sectionsHtml += `
+          <div class="sp-restore-panel">
+            <div class="sp-restore-panel-header">
+              <div><strong>${sectionLabels[s]}</strong></div>
+              <div class="muted" style="font-size: 0.85rem;">
+                Backup: ${info.backupCount ?? 0} ·
+                Destination: ${info.destCount ?? 0}
+                ${showMerge && info.backupCount > 0
+                  ? ` · In both: ${info.inBoth} · Only in backup: ${info.onlyInBackup} · Only in destination: ${info.onlyInDest}`
+                  : ''}
+              </div>
+            </div>
+            <div class="sp-restore-panel-radios">
+              <label>
+                <input type="radio" name="policy_${s}" value="replace" ${defaultPolicy === 'replace' ? 'checked' : ''} />
+                Replace ${showMerge ? '(wipe and overwrite)' : ''}
+              </label>
+              ${showMerge ? `
+                <label>
+                  <input type="radio" name="policy_${s}" value="merge" ${defaultPolicy === 'merge' ? 'checked' : ''} />
+                  Merge (upsert by name)
+                </label>
+              ` : ''}
+              <label>
+                <input type="radio" name="policy_${s}" value="skip" />
+                Skip
+              </label>
+            </div>
+          </div>
+        `;
+      }
+
+      // Secrets toggle (separate from sections).
+      // Pre-compute the paragraph text and the radio-buttons HTML separately
+      // so the template literal doesn't have a multi-line ternary inside a
+      // ${...} substitution — that pattern was causing parse errors in some
+      // browser configurations even though Node parses it fine.
+      const secretsExplain = summary.hasConfigJs
+        ? "Restores just the jwtSecret and showToken from the backup, leaving this server's port, database path, and other config.js settings untouched. All current admin sessions will end. The FPP plugin keeps working without re-pasting the token. Server restart required."
+        : "The backup does not include a config.js — secrets cannot be restored.";
+      const secretsRadios = summary.hasConfigJs
+        ? '<div class="sp-restore-panel-radios">'
+          + '<label><input type="radio" name="policy_secrets" value="replace" />Replace (triggers server restart)</label>'
+          + '<label><input type="radio" name="policy_secrets" value="keep" checked />Keep current secrets</label>'
+          + '</div>'
+        : '';
+      const secretsHtml = `
+        <div class="sp-restore-panel">
+          <div><strong>Secrets (config.js)</strong></div>
+          <p class="muted" style="font-size: 0.85rem; margin: 0.3rem 0 0.5rem;">${secretsExplain}</p>
+          ${secretsRadios}
+        </div>
+      `;
+
+      const coverArtHtml = summary.coverArtCount > 0 ? `
+        <div class="sp-restore-panel">
+          <div class="sp-restore-panel-header">
+            <div><strong>Cover-art images</strong></div>
+            <div class="muted" style="font-size: 0.85rem;">${summary.coverArtCount} files in backup</div>
+          </div>
+          <div class="sp-restore-panel-radios">
+            <label>
+              <input type="radio" name="policy_coverArt" value="restore" checked />
+              Restore (overwrites existing files with same name)
+            </label>
+            <label>
+              <input type="radio" name="policy_coverArt" value="skip" />
+              Skip
+            </label>
+          </div>
+        </div>
+      ` : '';
+
+      area.innerHTML = `
+        <h3>Choose what to restore</h3>
+        <p class="muted" style="font-size: 0.85rem; margin: 0 0 0.75rem;">
+          Backup taken ${summary.backupExportedAt}
+          ${summary.backupVersion ? ` · from ShowPilot v${summary.backupVersion}` : ''}
+        </p>
+        ${sectionsHtml}
+        ${secretsHtml}
+        ${coverArtHtml}
+        <div class="sp-restore-actions">
+          <button onclick="confirmRestore()">Apply restore</button>
+          <button class="secondary" onclick="cancelRestore()">Cancel</button>
+        </div>
+      `;
+      area.style.display = 'block';
+    }
+
+    function cancelRestore() {
+      pendingBackup = null;
+      pendingSummary = null;
+      document.getElementById('restoreFileInput').value = '';
+      document.getElementById('restorePoliciesArea').style.display = 'none';
+      document.getElementById('restoreStatus').textContent = '';
+    }
+
+    async function confirmRestore() {
+      if (!pendingBackup) return;
+      // Collect policies from the radio groups
+      const sectionNames = ['config', 'sequences', 'templates', 'users'];
+      const policies = {};
+      for (const s of sectionNames) {
+        const sel = document.querySelector(`input[name="policy_${s}"]:checked`);
+        policies[s] = sel ? sel.value : 'skip';
+      }
+      const secretsSel = document.querySelector('input[name="policy_secrets"]:checked');
+      policies.secrets = secretsSel ? secretsSel.value : 'keep';
+      const coverArtSel = document.querySelector('input[name="policy_coverArt"]:checked');
+      policies.coverArt = coverArtSel ? coverArtSel.value : 'skip';
+
+      // Big warning if secrets are being replaced — and refuse if user picks
+      // skip on everything (would be a no-op).
+      const allSkip = Object.values(policies).every(p => p === 'skip' || p === 'keep');
+      if (allSkip) {
+        await showAlert('Nothing selected to restore — every section is set to skip.');
+        return;
+      }
+
+      let warning = 'Apply this restore? This action cannot be undone.';
+      if (policies.secrets === 'replace') {
+        warning += "\n\nThe server will RESTART after restore (secrets changed). All admin sessions will end. You'll need to log in with credentials from the backup.";
+      }
+      if (Object.values(policies).some(p => p === 'replace')) {
+        warning += '\n\nReplace mode wipes destination data for those sections.';
+      }
+      const ok = await showConfirm(warning, { okLabel: 'Restore', danger: true });
+      if (!ok) return;
+
+      const status = document.getElementById('restoreStatus');
+      status.textContent = 'Applying restore...';
+      try {
+        const r = await fetch('/api/admin/backup/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ backup: pendingBackup, policies }),
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + r.status));
+        }
+        const result = data.result;
+        let msg = 'Restore complete.\n\n';
+        for (const [section, count] of Object.entries(result.restored)) {
+          if (count > 0) msg += `• ${section}: ${count} rows\n`;
+        }
+        if (result.coverArtRestored > 0) msg += `• cover art: ${result.coverArtRestored} files\n`;
+        if (result.requiresRestart) {
+          if (result.willAutoRestart) {
+            msg += '\n⚠ Server is restarting now (secrets changed). The page will become unresponsive briefly. Reload after a few seconds and log in with credentials from the backup.';
+          } else {
+            // Manual restart required — supervisor not detected
+            msg += '\n⚠ Server restart REQUIRED — secrets are written to config.js but the running process still has the old jwtSecret in memory until you restart.';
+            if (result.manualRestartHint) {
+              msg += '\n\nRun this to restart:\n' + result.manualRestartHint;
+            }
+            msg += '\n\nAfter restart, log in with credentials from the backup.';
+          }
+        } else {
+          msg += '\nReload the page to see the new state.';
+        }
+        await showAlert(msg);
+        // If supervisor will auto-restart, poll then reload. If manual,
+        // don't reload — the page would just fail until they restart.
+        if (result.requiresRestart && result.willAutoRestart) {
+          // Server is mid-restart — leave the page alone, user reloads
+          // manually when ready
+        } else if (!result.requiresRestart) {
+          location.reload();
+        }
+        // (manual restart case: leave the user on this page so the
+        // restart hint stays visible until they actually restart.)
+      } catch (err) {
+        status.textContent = 'Restore failed: ' + err.message;
+        showAlert('Restore failed: ' + err.message);
+      }
+    }
   </script>
 
   <script>
@@ -2732,7 +4590,17 @@
     }
 
     async function api(path, opts = {}) {
-      const res = await fetch('/api/admin' + path, { credentials: 'include', ...opts });
+      // If a body is being sent, default Content-Type to application/json
+      // unless the caller already set one (multipart/FormData callers must
+      // override). Without this, express.json() refuses to parse the body
+      // and req.body is empty — which silently broke PUT /me/theme by
+      // making the server see theme=undefined and clear the preference.
+      const headers = { ...(opts.headers || {}) };
+      if (opts.body && typeof opts.body === 'string' &&
+          !Object.keys(headers).some(k => k.toLowerCase() === 'content-type')) {
+        headers['Content-Type'] = 'application/json';
+      }
+      const res = await fetch('/api/admin' + path, { credentials: 'include', ...opts, headers });
       const data = res.ok ? await res.json() : null;
       if (res.status === 401) { show('loginView'); hide('appView'); }
       return { ok: res.ok, status: res.status, data };
@@ -2753,12 +4621,76 @@
       const r = await api('/me');
       if (r.ok) {
         window._ofCurrentUser = r.data;
+        syncThemeWithServer(r.data);
         renderHeaderUser();
         hide('loginView'); show('appView');
         await loadAll();
         if (r.data?.mustChangePassword) showChangePasswordModal(true);
       } else {
         show('loginView'); hide('appView');
+        // Check if this is a fresh install — if so, show the
+        // restore-from-backup option below the login form.
+        try {
+          const f = await fetch('/api/setup/first-boot-status', { credentials: 'include' });
+          if (f.ok) {
+            const data = await f.json();
+            const fb = document.getElementById('firstBootRestore');
+            if (fb) fb.classList.toggle('hidden', !data.firstBoot);
+          }
+        } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // First-boot restore — uploads a backup before any admin login.
+    // Server gates this to "still in initial admin/admin state."
+    async function firstBootRestore(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const msgEl = document.getElementById('firstBootRestoreMsg');
+      msgEl.textContent = 'Reading backup...';
+      try {
+        const text = await file.text();
+        let parsed;
+        try { parsed = JSON.parse(text); }
+        catch (e) { throw new Error('File is not valid JSON'); }
+        // Inspect endpoint requires auth — skip it on first-boot path
+        // and just submit. The server will validate the manifest.
+        const ok = await showConfirm(
+          'Restore this backup as the initial state of this fresh install?\n\n' +
+          'The server will RESTART afterward (secrets are restored). The page will reload itself once the server comes back up.',
+          { okLabel: 'Restore', danger: true }
+        );
+        if (!ok) {
+          msgEl.textContent = '';
+          document.getElementById('firstBootRestoreFile').value = '';
+          return;
+        }
+        msgEl.textContent = 'Applying restore...';
+        const r = await fetch('/api/setup/restore-from-backup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ backup: parsed }),
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + r.status));
+        }
+        if (data.result?.willAutoRestart) {
+          msgEl.textContent = 'Restore complete. Server is restarting — page will reload in 5 seconds.';
+          // Wait for the server to come back, then reload
+          setTimeout(() => location.reload(), 5500);
+        } else {
+          // Manual restart required — show the hint and wait for the
+          // user to restart and reload manually.
+          const hint = data.result?.manualRestartHint || 'Restart the server manually.';
+          msgEl.innerHTML = 'Restore complete. <strong>Server restart REQUIRED</strong> for new secrets to take effect.<br>Run: <code>' +
+            hint.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+            '</code><br>Then reload this page and log in with credentials from the backup.';
+        }
+      } catch (err) {
+        msgEl.textContent = 'Restore failed: ' + err.message;
+        showAlert('Restore failed: ' + err.message);
       }
     }
 
@@ -2777,7 +4709,10 @@
       if (r.ok) {
         // Capture current user from /me after login (login response doesn't include id)
         const me = await api('/me');
-        if (me.ok) window._ofCurrentUser = me.data;
+        if (me.ok) {
+          window._ofCurrentUser = me.data;
+          syncThemeWithServer(me.data);
+        }
         renderHeaderUser();
         hide('loginView'); show('appView');
         await loadAll();
@@ -2840,26 +4775,68 @@
       setChk('cfg_prevent_multiple_requests', c.prevent_multiple_requests);
       setVal('cfg_viewer_request_limit', c.viewer_request_limit || 1);
       updateViewerRequestLimitVisibility();
+      // Repeat blockers (v0.31.1+) — default ON if column is missing/null
+      // (older installs that haven't migrated yet).
+      setChk('cfg_block_request_currently_playing', c.block_request_currently_playing == null ? 1 : c.block_request_currently_playing);
+      setChk('cfg_block_request_next_up',          c.block_request_next_up          == null ? 1 : c.block_request_next_up);
+      setChk('cfg_block_vote_currently_playing',   c.block_vote_currently_playing   == null ? 1 : c.block_vote_currently_playing);
+      setChk('cfg_block_vote_next_up',             c.block_vote_next_up             == null ? 1 : c.block_vote_next_up);
       setChk('cfg_prevent_multiple_votes', c.prevent_multiple_votes);
+      setChk('cfg_allow_vote_change', c.allow_vote_change);
       setChk('cfg_reset_votes_after_round', c.reset_votes_after_round);
+      setChk('cfg_tiebreak_enabled', c.tiebreak_enabled);
+      setVal('cfg_tiebreak_duration_sec', c.tiebreak_duration_sec || 60);
       setChk('cfg_play_psa_enabled', c.play_psa_enabled);
       setVal('cfg_psa_frequency', c.psa_frequency);
+      // Trigger mode (v0.30.0+): drives which help block + label text shows.
+      // Falls back to 'interactions' for older configs without the column.
+      const trigMode = c.psa_trigger_mode === 'sequences' ? 'sequences' : 'interactions';
+      setVal('cfg_psa_trigger_mode', trigMode);
+      applyPsaTriggerModeUi(trigMode);
       setChk('cfg_check_viewer_present', c.check_viewer_present);
       setVal('cfg_show_latitude', c.show_latitude);
       setVal('cfg_show_longitude', c.show_longitude);
       setVal('cfg_check_radius_miles', c.check_radius_miles);
+      setChk('cfg_location_code_enabled', c.location_code_enabled);
+      setVal('cfg_location_code', c.location_code || '');
+      setChk('cfg_audio_enabled', c.audio_enabled !== 0);
       setChk('cfg_audio_gate_enabled', c.audio_gate_enabled);
       setVal('cfg_audio_gate_radius_miles', c.audio_gate_radius_miles || 0.5);
+      setVal('cfg_audio_sync_offset_ms', c.audio_sync_offset_ms || 0);
       setChk('cfg_viewer_source_obfuscate', c.viewer_source_obfuscate);
+      setChk('cfg_pwa_admin_enabled', c.pwa_admin_enabled);
+      setChk('cfg_pwa_viewer_enabled', c.pwa_viewer_enabled);
+      setVal('cfg_pwa_viewer_name', c.pwa_viewer_name || '');
+      // Icon preview — show the configured icon if any, otherwise a hint.
+      updatePwaIconPreview(c.pwa_viewer_icon);
+      updateAudioEnabledVisibility();
       updateAudioGateVisibility();
+      updateAllowVoteChangeVisibility();
       setVal('cfg_hide_sequence_after_played', c.hide_sequence_after_played);
       setVal('cfg_blocked_ips', c.blocked_ips || '');
       setVal('cfg_public_base_url', c.public_base_url || '');
       setVal('cfg_player_decoration', c.player_decoration || 'none');
       setChk('cfg_player_decoration_animated', c.player_decoration_animated);
-      setChk('cfg_page_snow_enabled', c.page_snow_enabled);
+      // Page-wide effect controls (v0.32.0+). Reads from the new
+      // page_effect/color/intensity columns; falls back to the legacy
+      // page_snow_enabled if those aren't populated yet (e.g. install
+      // upgraded mid-conversation, or backup from an older version).
+      const effectName = (c.page_effect && c.page_effect !== 'none')
+        ? c.page_effect
+        : (c.page_snow_enabled ? 'snow' : 'none');
+      setVal('cfg_page_effect', effectName);
+      setVal('cfg_page_effect_color', c.page_effect_color || '');
+      setVal('cfg_page_effect_intensity', c.page_effect_intensity || 'medium');
+      syncPageEffectColorPicker();
+      updatePageEffectColorPlaceholder();
       loadCustomColorState(c.player_custom_color || '');
       updatePlayerCustomColorVisibility();
+      // Listen-on-phone launcher button
+      setVal('cfg_launcher_icon_source', c.launcher_icon_source || 'default');
+      setChk('cfg_launcher_show_chrome', (c.launcher_show_chrome === undefined || c.launcher_show_chrome === null) ? 1 : c.launcher_show_chrome);
+      setVal('cfg_launcher_size', c.launcher_size || 'medium');
+      updateLauncherIconPreview(c.launcher_icon_data || '');
+      updateLauncherUI();
       updateLocationMap();
     }
 
@@ -2871,6 +4848,17 @@
       inp.style.opacity = chk.checked ? '1' : '0.5';
     }
 
+    // Vote shifting (v0.32.6+) only makes sense when there's a per-viewer
+    // vote limit to shift around. Dim the row when prevent_multiple_votes
+    // is off so admins don't toggle a setting that has no effect.
+    function updateAllowVoteChangeVisibility() {
+      const chk = document.getElementById('cfg_prevent_multiple_votes');
+      const row = document.getElementById('cfg_allow_vote_change_row');
+      if (!chk || !row) return;
+      row.style.opacity = chk.checked ? '1' : '0.4';
+      row.style.pointerEvents = chk.checked ? '' : 'none';
+    }
+
     function updateAudioGateVisibility() {
       const chk = document.getElementById('cfg_audio_gate_enabled');
       const row = document.getElementById('cfg_audio_gate_radius_row');
@@ -2879,11 +4867,361 @@
       row.style.pointerEvents = chk.checked ? '' : 'none';
     }
 
+    // When audio is globally disabled, every other audio setting becomes
+    // moot (gate is for an audio that won't play, offset is for sync that
+    // won't happen). Dim the entire subsection so it's visually clear,
+    // and disable interaction so accidental toggles don't queue up
+    // changes the user won't see take effect.
+    function updateAudioEnabledVisibility() {
+      const chk = document.getElementById('cfg_audio_enabled');
+      const sub = document.getElementById('cfg_audio_subsection');
+      if (!chk || !sub) return;
+      sub.style.opacity = chk.checked ? '1' : '0.4';
+      sub.style.pointerEvents = chk.checked ? '' : 'none';
+    }
+
+    // ---- Admin install button handling ----
+    // The button is always visible so users have a clear affordance,
+    // but its behavior depends on whether the browser has fired
+    // `beforeinstallprompt`. If it has, we fire the install dialog.
+    // If it hasn't, we explain what's going on (already installed,
+    // not eligible yet, browser unsupported, etc.).
+    //
+    // We update the hint text so users don't think the button is broken
+    // when their browser silently won't install. The most common reasons
+    // an install button doesn't work are: (1) already installed (Chrome
+    // suppresses re-prompts), (2) running on iOS Safari which has no
+    // automatic install API (must use Share menu), (3) the manifest or
+    // service worker has a transient registration error from a previous
+    // version. We hint at all of these.
+    function handleAdminInstallClick() {
+      if (window.__deferredInstallPrompt) {
+        window.__deferredInstallPrompt.prompt();
+        window.__deferredInstallPrompt.userChoice.finally(function() {
+          window.__deferredInstallPrompt = null;
+          updateAdminInstallButtonState();
+        });
+        return;
+      }
+      // beforeinstallprompt hasn't fired. Show diagnostic info so we can
+      // tell exactly why. We dump the actual state values rather than
+      // guessing — saves a debugging round trip.
+      const ua = navigator.userAgent;
+      const isIOS = /iPhone|iPad|iPod/i.test(ua);
+      const standaloneMedia = window.matchMedia('(display-mode: standalone)').matches;
+      const navigatorStandalone = window.navigator.standalone === true;
+      const fullscreen = window.matchMedia('(display-mode: fullscreen)').matches;
+      const minimalUI = window.matchMedia('(display-mode: minimal-ui)').matches;
+      const swSupported = 'serviceWorker' in navigator;
+      const swRegistered = swSupported && navigator.serviceWorker.controller !== null;
+      let msg = 'PWA install diagnostic\n\n';
+      msg += 'beforeinstallprompt fired: NO\n';
+      msg += 'display-mode standalone: ' + standaloneMedia + '\n';
+      msg += 'navigator.standalone: ' + navigatorStandalone + '\n';
+      msg += 'display-mode fullscreen: ' + fullscreen + '\n';
+      msg += 'display-mode minimal-ui: ' + minimalUI + '\n';
+      msg += 'service worker supported: ' + swSupported + '\n';
+      msg += 'service worker active: ' + swRegistered + '\n';
+      msg += 'iOS device: ' + isIOS + '\n';
+      msg += '\n';
+      if (isIOS) {
+        msg += 'iOS Safari: install via Share menu → Add to Home Screen.';
+      } else if (standaloneMedia || navigatorStandalone) {
+        msg += 'Browser thinks page is in standalone mode. If you\'re seeing the regular browser UI, this is a bug. Try: clear site data, uninstall any old shortcut from home screen, restart browser.';
+      } else if (!swRegistered) {
+        msg += 'Service worker hasn\'t taken control yet. Try: hard refresh, or wait 30 seconds and tap again. Service workers can take a moment on first load.';
+      } else {
+        msg += 'Browser hasn\'t determined the page is installable. Possible reasons:\n• Already installed (uninstall first)\n• Manifest icon failed to load (check DevTools → Application → Manifest)\n• Browser doesn\'t support PWA install (Firefox)\n• Recent install dismissed; Chrome throttles re-prompts for hours';
+      }
+      alert(msg);
+    }
+
+    function updateAdminInstallButtonState() {
+      const btn = document.getElementById('pwaInstallBtn');
+      const hint = document.getElementById('pwaInstallHint');
+      const label = document.getElementById('pwaInstallBtnLabel');
+      if (!btn || !hint || !label) return;
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+        || window.navigator.standalone === true;
+      const ua = navigator.userAgent;
+      const isIOS = /iPhone|iPad|iPod/i.test(ua);
+      if (isStandalone) {
+        btn.disabled = true;
+        label.textContent = 'Already installed';
+        hint.textContent = '✓ ShowPilot Admin is running as an installed app.';
+      } else if (window.__deferredInstallPrompt) {
+        btn.disabled = false;
+        label.textContent = 'Install ShowPilot Admin';
+        hint.textContent = 'Tap to install on this device.';
+      } else if (isIOS) {
+        btn.disabled = false;
+        label.textContent = 'How to install on iOS';
+        hint.textContent = 'iOS doesn\'t support install prompts — tap the button for instructions.';
+      } else {
+        btn.disabled = false;
+        label.textContent = 'Install ShowPilot Admin';
+        hint.textContent = 'Tap to check eligibility. If your browser supports PWA install, the prompt will appear.';
+      }
+    }
+
+    // Hook into the existing beforeinstallprompt event so the button
+    // updates state when the prompt becomes available. The /head script
+    // already sets window.__deferredInstallPrompt on the event; we just
+    // refresh the button display when it changes.
+    window.addEventListener('beforeinstallprompt', function() {
+      // Defer to the next tick so __deferredInstallPrompt is set first.
+      setTimeout(updateAdminInstallButtonState, 0);
+    });
+    window.addEventListener('appinstalled', function() {
+      window.__deferredInstallPrompt = null;
+      updateAdminInstallButtonState();
+    });
+    // Initial state on load — call after a short delay to let the
+    // browser fire beforeinstallprompt if it's going to.
+    setTimeout(updateAdminInstallButtonState, 1500);
+
+    // ---- PWA icon upload + preview ----
+    // Reads a user-selected file as base64 data URL and saves to config.
+    // We cap at ~200KB encoded — anything larger usually means the user
+    // uploaded a high-resolution photo; a properly-sized icon is well
+    // under that.
+    function updatePwaIconPreview(iconData) {
+      const el = document.getElementById('pwaViewerIconPreview');
+      if (!el) return;
+      if (iconData && iconData.startsWith('data:')) {
+        el.innerHTML = '<img src="' + iconData + '" style="width: 96px; height: 96px; border-radius: 12px; object-fit: cover; border: 1px solid var(--border);" alt="App icon" />';
+      } else {
+        el.innerHTML = '<span class="muted" style="font-size: 0.8rem;">No icon set — viewers will see the ShowPilot favicon.</span>';
+      }
+    }
+
+    function clearPwaViewerIcon() {
+      saveSetting('pwa_viewer_icon', '');
+      updatePwaIconPreview('');
+      const fileInp = document.getElementById('pwaViewerIconFile');
+      if (fileInp) fileInp.value = '';
+    }
+
+    // Wire up the file picker once the DOM is ready. setTimeout(0) to
+    // ensure the element exists when this runs (config script may load
+    // before the App tab pane is fully attached, depending on browser
+    // parsing order). Idempotent — re-attaching the listener is harmless.
+    setTimeout(function() {
+      const inp = document.getElementById('pwaViewerIconFile');
+      if (!inp) return;
+      inp.addEventListener('change', function(e) {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        // Cap file size at 250KB raw (data URL is ~33% larger when base64'd,
+        // so this lands around the 200KB stored limit). Modern phones don't
+        // need bigger icons; this also keeps the manifest response cheap.
+        const MAX_BYTES = 250 * 1024;
+        if (file.size > MAX_BYTES) {
+          alert('Icon file is too large. Please use a smaller image (under 250KB).\nA 512×512 PNG typically falls well under this size.');
+          inp.value = '';
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = function() {
+          const dataUrl = reader.result;
+          saveSetting('pwa_viewer_icon', dataUrl);
+          updatePwaIconPreview(dataUrl);
+        };
+        reader.onerror = function() {
+          alert('Could not read the selected file. Try a different image.');
+        };
+        reader.readAsDataURL(file);
+      });
+    }, 0);
+
+    // ============================================================
+    // LISTEN-ON-PHONE LAUNCHER BUTTON
+    // ============================================================
+    // Mirror of the preset SVGs in public/rf-compat.js. Kept in sync by
+    // copy-paste — small enough that a runtime fetch isn't worth it. If
+    // you change one, change the other.
+    const LAUNCHER_PRESETS = {
+      headphones: '<svg viewBox="0 0 24 24" fill="currentColor" width="60%" height="60%" style="display:block;"><path d="M12 3a9 9 0 0 0-9 9v6a3 3 0 0 0 3 3h2v-8H5v-1a7 7 0 1 1 14 0v1h-3v8h2a3 3 0 0 0 3-3v-6a9 9 0 0 0-9-9z"/></svg>',
+      tree: '<svg viewBox="0 0 24 24" fill="currentColor" width="65%" height="65%" style="display:block;"><path d="M12 2L7 9h3l-4 6h3l-5 7h16l-5-7h3l-4-6h3l-5-7zm-1 19h2v2h-2v-2z"/></svg>',
+      pumpkin: '<svg viewBox="0 0 24 24" fill="currentColor" width="62%" height="62%" style="display:block;"><path d="M12 4c-.7 0-1.3.3-1.7.8A2.5 2.5 0 0 0 8 5C5 5 3 8 3 12s2 7 5 7c.6 0 1.2-.1 1.7-.4.7.5 1.5.8 2.3.8s1.6-.3 2.3-.8c.5.3 1.1.4 1.7.4 3 0 5-3 5-7s-2-7-5-7c-.8 0-1.6.3-2.3.8C12.6 4.3 12.3 4 12 4zm-3 7l1.5 2L9 15l-1.5-2L9 11zm6 0l1.5 2L15 15l-1.5-2L15 11zm-5 4h4l-1 2h-2l-1-2z"/></svg>',
+      ghost: '<svg viewBox="0 0 24 24" fill="currentColor" width="62%" height="62%" style="display:block;"><path d="M12 2a8 8 0 0 0-8 8v12l2.5-2 2.5 2 2.5-2 2.5 2 2.5-2 2.5 2v-12a8 8 0 0 0-8-8zm-3 7a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm6 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>',
+      snowflake: '<svg viewBox="0 0 24 24" fill="currentColor" width="65%" height="65%" style="display:block;"><path d="M12 2v3.5l2-1.5 1 1.3-3 2.2v3l2.6-1.5.5-3.6 1.7.2-.3 2.4 3-1.7.9 1.5-3 1.7 2.2.9-.7 1.6-3-1.2L17 12l2.2 1.2 3-1.2.7 1.6-2.2.9 3 1.7-.9 1.5-3-1.7.3 2.4-1.7.2-.5-3.6-2.6-1.5v3l3 2.2-1 1.3-2-1.5V22h-2v-3.5l-2 1.5-1-1.3 3-2.2v-3l-2.6 1.5-.5 3.6-1.7-.2.3-2.4-3 1.7-.9-1.5 3-1.7L4.6 13l.7-1.6 3 1.2L7 12l-2.2-1.2-3 1.2-.7-1.6 2.2-.9-3-1.7.9-1.5 3 1.7-.3-2.4 1.7-.2.5 3.6L9 9.5v-3L6 4.3l1-1.3 2 1.5V2h3z" transform="scale(0.85) translate(2.1,2.1)"/></svg>',
+      music: '<svg viewBox="0 0 24 24" fill="currentColor" width="60%" height="60%" style="display:block;"><path d="M19.952 1.651a.75.75 0 01.298.599V16.303a3 3 0 01-2.176 2.884l-1.32.377a2.553 2.553 0 11-1.403-4.909l2.311-.66a1.5 1.5 0 001.088-1.442V6.994l-9 2.572v9.737a3 3 0 01-2.176 2.884l-1.32.377a2.553 2.553 0 11-1.402-4.909l2.31-.66a1.5 1.5 0 001.088-1.442V5.25a.75.75 0 01.544-.721l10.5-3a.75.75 0 01.658.122z"/></svg>',
+      heart: '<svg viewBox="0 0 24 24" fill="currentColor" width="60%" height="60%" style="display:block;"><path d="M12 21s-7-4.5-9.5-9.5C1 8 3 4 7 4c2 0 3.5 1 5 3 1.5-2 3-3 5-3 4 0 6 4 4.5 7.5C19 16.5 12 21 12 21z"/></svg>',
+      shamrock: '<svg viewBox="0 0 24 24" fill="currentColor" width="62%" height="62%" style="display:block;"><path d="M12 11c-1.5-3-4.5-3-5.5-1.5S6 13 9 14c-2.5 1-3 4-1.5 5s4 .5 5-2c0 3 2 5 4 5s4-2 4-5c1 2.5 3.5 3 5 2s1-4-1.5-5c3-1 4-3.5 2.5-4.5S14 8 12.5 11l-.5-9-.5 9z" transform="translate(0,1)"/></svg>',
+      star: '<svg viewBox="0 0 24 24" fill="currentColor" width="62%" height="62%" style="display:block;"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7l3-7z"/></svg>',
+    };
+    const LAUNCHER_SIZES = { small: 40, medium: 52, large: 72 };
+
+    // Render the preview button using current admin form values.
+    function updateLauncherPreview() {
+      const previewBtn = document.getElementById('launcherPreviewBtn');
+      if (!previewBtn) return;
+      const source = (document.getElementById('cfg_launcher_icon_source') || {}).value || 'default';
+      const showChrome = (document.getElementById('cfg_launcher_show_chrome') || {}).checked;
+      const sizeKey = (document.getElementById('cfg_launcher_size') || {}).value || 'medium';
+      const px = LAUNCHER_SIZES[sizeKey] || 52;
+
+      // Resolve icon HTML to mirror the viewer-side logic.
+      const iconSizePct = showChrome ? 75 : 100;
+      let iconHtml;
+      if (source === 'custom') {
+        const stored = window._launcherCustomIconData || '';
+        if (stored) {
+          iconHtml = '<img src="' + stored + '" alt="" style="width:' + iconSizePct +
+            '%;height:' + iconSizePct + '%;object-fit:contain;display:block;" />';
+        } else {
+          // No image uploaded yet — show emoji as a stand-in.
+          iconHtml = '🎧';
+        }
+      } else if (source.indexOf('preset:') === 0) {
+        iconHtml = LAUNCHER_PRESETS[source.slice(7)] || '🎧';
+      } else {
+        iconHtml = '🎧';
+      }
+
+      previewBtn.innerHTML = iconHtml;
+      const chrome = showChrome
+        ? 'background: rgba(220,38,38,0.95); color: white; border: 2px solid rgba(255,255,255,0.4); box-shadow: 0 4px 12px rgba(0,0,0,0.4);'
+        : 'background: transparent; color: white; border: 0; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.45));';
+      previewBtn.style.cssText = `
+        width: ${px}px; height: ${px}px; border-radius: 50%;
+        ${chrome}
+        font-size: ${Math.round(px * 0.46)}px;
+        display: flex; align-items: center; justify-content: center;
+        padding: 0; line-height: 1; overflow: hidden;
+      `;
+    }
+
+    // Show/hide the custom-image picker row + refresh preview when the
+    // icon source dropdown changes.
+    function updateLauncherUI() {
+      const sel = document.getElementById('cfg_launcher_icon_source');
+      const customRow = document.getElementById('cfg_launcher_custom_row');
+      if (sel && customRow) {
+        customRow.style.display = (sel.value === 'custom') ? '' : 'none';
+      }
+      updateLauncherPreview();
+    }
+
+    function updateLauncherIconPreview(dataUrl) {
+      const wrap = document.getElementById('launcherIconPreviewWrap');
+      const clearBtn = document.getElementById('launcherIconClearBtn');
+      if (!wrap) return;
+      window._launcherCustomIconData = dataUrl || '';
+      if (dataUrl) {
+        wrap.innerHTML = '<img src="' + dataUrl + '" alt="" style="width: 64px; height: 64px; ' +
+          'border-radius: 8px; object-fit: contain; border: 1px solid var(--border); ' +
+          'background: rgba(255,255,255,0.04); padding: 4px;" />';
+        if (clearBtn) clearBtn.style.display = '';
+      } else {
+        wrap.innerHTML = '<span class="muted" style="font-size: 0.8rem;">No custom icon uploaded yet.</span>';
+        if (clearBtn) clearBtn.style.display = 'none';
+      }
+      updateLauncherPreview();
+    }
+
+    function clearLauncherIcon() {
+      saveSetting('launcher_icon_data', '');
+      updateLauncherIconPreview('');
+      const fileInp = document.getElementById('launcherIconFile');
+      if (fileInp) fileInp.value = '';
+    }
+
+    // Wire up the file picker. Same defer pattern as the PWA icon picker
+    // above (DOM-ready guard).
+    setTimeout(function() {
+      const inp = document.getElementById('launcherIconFile');
+      if (!inp) return;
+      inp.addEventListener('change', function(e) {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        // 250KB raw cap — same reasoning as PWA icon. Launcher images are
+        // displayed at 40-72px, so even smaller files render fine.
+        const MAX_BYTES = 250 * 1024;
+        if (file.size > MAX_BYTES) {
+          alert('Image is too large. Please use a smaller file (under 250KB).');
+          inp.value = '';
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = function() {
+          const dataUrl = reader.result;
+          saveSetting('launcher_icon_data', dataUrl);
+          updateLauncherIconPreview(dataUrl);
+        };
+        reader.onerror = function() {
+          alert('Could not read the selected file. Try a different image.');
+        };
+        reader.readAsDataURL(file);
+      });
+    }, 0);
+
     function updatePlayerCustomColorVisibility() {
       const sel = document.getElementById('cfg_player_decoration');
       const row = document.getElementById('cfg_player_custom_color_row');
       if (!sel || !row) return;
       row.style.display = (sel.value === 'none') ? '' : 'none';
+    }
+
+    // ---- Page effect color helpers (v0.32.0+) ----
+    // Defaults match the rf-compat.js EFFECTS table — keep in sync.
+    const PAGE_EFFECT_DEFAULT_COLORS = {
+      none: '',
+      snow: '#ffffff',
+      leaves: '#d2691e',
+      fireworks: '#ff5050',
+      hearts: '#ff4d8d',
+      stars: '#fff5b3',
+      bats: '#1a0033',
+      confetti: '#ff4d4d',
+      petals: '#ffb3d1',
+      embers: '#ff7a1a',
+      bubbles: '#a0d8ef',
+      rain: '#a8c5e0',
+    };
+
+    // Color picker → text field. Picker emits hex; the text field is the
+    // saved value, so we route the picker through the text-save path.
+    function onPageEffectColorPick(hex) {
+      const text = document.getElementById('cfg_page_effect_color');
+      if (!text) return;
+      text.value = hex;
+      saveSetting('page_effect_color', hex);
+    }
+    // Text field changed → keep picker in sync. Only valid hex updates the
+    // picker; anything else (rgb(), named colors, empty) leaves it alone.
+    function syncPageEffectColorPicker() {
+      const text = document.getElementById('cfg_page_effect_color');
+      const picker = document.getElementById('cfg_page_effect_color_picker');
+      if (!text || !picker) return;
+      const v = (text.value || '').trim();
+      if (/^#[0-9a-fA-F]{6}$/.test(v)) {
+        picker.value = v;
+      } else {
+        // Use whatever default this effect has so picker isn't visually misleading
+        const eff = (document.getElementById('cfg_page_effect') || {}).value || 'none';
+        const def = PAGE_EFFECT_DEFAULT_COLORS[eff] || '#ffffff';
+        if (def && /^#[0-9a-fA-F]{6}$/.test(def)) picker.value = def;
+      }
+    }
+    // Show the effect's default color in the text field's placeholder so
+    // admins can see what blank means.
+    function updatePageEffectColorPlaceholder() {
+      const eff = (document.getElementById('cfg_page_effect') || {}).value || 'none';
+      const text = document.getElementById('cfg_page_effect_color');
+      if (!text) return;
+      const def = PAGE_EFFECT_DEFAULT_COLORS[eff];
+      text.placeholder = def ? `(default: ${def})` : '(default)';
+      syncPageEffectColorPicker();
+    }
+    // "Use default" button — clear the override.
+    function resetPageEffectColor() {
+      const text = document.getElementById('cfg_page_effect_color');
+      if (!text) return;
+      text.value = '';
+      saveSetting('page_effect_color', '');
+      syncPageEffectColorPicker();
     }
 
     // ---- Custom player color (solid + gradient) ----
@@ -3006,6 +5344,17 @@
     function switchTab(name) {
       document.querySelectorAll('.sub-tab').forEach(t => t.classList.toggle('active', t.dataset.subtab === name));
       document.querySelectorAll('.sub-tab-pane').forEach(c => c.classList.toggle('active', c.dataset.subtab === name));
+      // Per-sub-tab data refresh hooks. Same pattern as switchMainTab —
+      // refresh-on-open keeps the UI fresh without polling when not visible.
+      if (name === 'public-access') loadCloudflaredStatus();
+      if (name === 'updates') {
+        // First open: hit /status (uses cached check). Subsequent opens
+        // also hit /status — the server's check cache is 1h, so we're
+        // not hammering GitHub. The "Check for updates" button does a
+        // forced check.
+        refreshUpdateStatus({ force: false });
+        updatesLoadedOnce = true;
+      }
     }
 
     async function saveSetting(key, value) {
@@ -3018,6 +5367,27 @@
       if (!r.ok) {
         showAlert('Failed to save ' + key);
       }
+    }
+
+    // PSA trigger mode UI helpers (v0.30.0+). Two pieces:
+    //   1. Show the help block matching the active mode (hide the other).
+    //   2. Update the frequency label to read "Frequency (interactions
+    //      between PSAs)" or "Frequency (sequences between PSAs)" so the
+    //      number input is unambiguous.
+    function applyPsaTriggerModeUi(mode) {
+      const isSequences = mode === 'sequences';
+      const showHelp = (id, show) => { const el = document.getElementById(id); if (el) el.style.display = show ? '' : 'none'; };
+      showHelp('psaModeHelp_interactions', !isSequences);
+      showHelp('psaModeHelp_sequences',     isSequences);
+      const lbl = document.getElementById('cfg_psa_frequency_label');
+      if (lbl) lbl.textContent = isSequences
+        ? 'Frequency (sequences between PSAs):'
+        : 'Frequency (interactions between PSAs):';
+    }
+
+    function onPsaTriggerModeChange(mode) {
+      applyPsaTriggerModeUi(mode);
+      saveSetting('psa_trigger_mode', mode);
     }
 
     async function detectMyLocation() {
@@ -3177,11 +5547,11 @@
         if (mode === 'OFF') {
           badge.textContent = 'OFF';
           badge.className = 'pill pill-danger';
-          if (btn) { btn.textContent = 'Turn On'; btn.className = ''; }
+          setVcToggle(btn, false);
         } else {
           badge.textContent = 'ON · ' + mode;
           badge.className = 'pill pill-success';
-          if (btn) { btn.textContent = 'Turn Off'; btn.className = 'secondary'; }
+          setVcToggle(btn, true);
         }
       }
       // Also update the header mode pill
@@ -3192,7 +5562,21 @@
       }
     }
 
-    async function toggleViewerControl() {
+    /* Helper used by every updateViewerControlBadge implementation to flip
+       the slide toggle's visual state. The toggle's <label> wrapper carries
+       id="toggleViewerBtn"; its inner .toggle-track holds data-on. We also
+       keep aria-checked in sync for screen readers and toggle the small
+       "Off" text label so users see at a glance which side the switch is on. */
+    function setVcToggle(el, on) {
+      if (!el) return;
+      const track = el.querySelector('.toggle-track');
+      const text  = el.querySelector('.toggle-text');
+      if (track) track.setAttribute('data-on', on ? '1' : '0');
+      if (text)  text.textContent = on ? 'On' : 'Off';
+      el.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+
+        async function toggleViewerControl() {
       const current = document.getElementById('modeSelect').value;
       if (current !== 'OFF') {
         // Currently on — turn off. Server-side, this stashes the current mode.
@@ -3485,6 +5869,10 @@
         <td><label class="toggle" style="transform:scale(0.7);"><input type="checkbox" ${seq.votable ? 'checked' : ''} onchange="updateSeqField(${seq.id}, 'votable', this.checked ? 1 : 0)" /><span class="slider"></span></label></td>
         <td><label class="toggle" style="transform:scale(0.7);"><input type="checkbox" ${seq.jukeboxable ? 'checked' : ''} onchange="updateSeqField(${seq.id}, 'jukeboxable', this.checked ? 1 : 0)" /><span class="slider"></span></label></td>
         <td><label class="toggle" style="transform:scale(0.7);"><input type="checkbox" ${seq.is_psa ? 'checked' : ''} onchange="updateSeqField(${seq.id}, 'is_psa', this.checked ? 1 : 0)" /><span class="slider"></span></label></td>
+        <td><input type="number" min="0" max="1440" step="1" value="${seq.cooldown_minutes || 0}"
+                   onchange="updateSeqCooldown(${seq.id}, this)"
+                   style="width: 70px; padding: 0.3rem 0.4rem; font-size: 0.9rem;"
+                   title="Minutes to suppress this sequence after it plays. 0 = no cooldown." /></td>
         <td style="white-space: nowrap;">
           <button class="secondary" onclick="toggleSeqPreview(${seq.id})" title="Preview the audio for this sequence" style="margin-right: 0.4rem;">▶</button>
           <button class="secondary" onclick="openTrackSearchModal(${seq.id})" title="Search iTunes / MusicBrainz for the right title, artist, and cover" style="margin-right: 0.4rem;">🔍 Search</button>
@@ -3516,6 +5904,17 @@
       // Update local cache silently; don't reload to avoid yanking the user's focus
       const seq = sequencesCache.find(s => s.id === id);
       if (seq) seq[field] = trimmed;
+    }
+
+    // Cooldown input has its own helper because we need to coerce to a
+    // valid integer in [0, 1440] before sending — invalid values would
+    // either blow up the server validation or, worse, save garbage.
+    function updateSeqCooldown(id, inputEl) {
+      let v = parseInt(inputEl.value, 10);
+      if (!Number.isFinite(v) || v < 0) v = 0;
+      if (v > 1440) v = 1440; // cap at 24 hours; longer makes no sense for a single show
+      inputEl.value = v; // reflect the clamp back into the input
+      updateSeqField(id, 'cooldown_minutes', v);
     }
 
     // ======= Audio preview =======
@@ -4814,6 +7213,24 @@
       updateDraftButtons();
     }
 
+    // Renaming the template marks the editor dirty. Without this, typing in
+    // the name field never enabled the Save button — saveDesignerChanges()
+    // POSTs the name to the server, but only when invoked from the Save
+    // button which was greyed out because hasDraft was still false.
+    function onTemplateNameInput() {
+      if (!selectedTplId) return;
+      // Only flag dirty if the name actually differs from what's loaded.
+      // Avoids enabling Save when the user clicks into the field and tabs
+      // away without changing anything.
+      const tpl = (templates || []).find(t => t.id === selectedTplId);
+      const original = tpl ? (tpl.name || '') : '';
+      const current = document.getElementById('tplName').value;
+      if (current !== original) {
+        hasDraft = true;
+        updateDraftButtons();
+      }
+    }
+
     function clearFavicon() {
       document.getElementById('tplFaviconUrl').value = '';
       document.getElementById('tplFaviconFile').value = '';
@@ -5074,8 +7491,47 @@
       canvas.innerHTML = currentBlocks.map((b, idx) => {
         const def = blockTypes.find(t => t.type === b.type);
         const label = def ? def.label : b.type;
-        // Editable props as form fields. Color values use color picker, others use text.
+        // Editable props as form fields. The control we render for each prop
+        // follows this priority:
+        //   1. If the block's def declares propTypes[key], honor that
+        //      (v0.32.13+). Currently supports 'enum' (dropdown) and
+        //      'number' (numeric input). This is for cases where the
+        //      auto-inference below picks the wrong control — e.g. a
+        //      string-valued prop with a fixed set of valid values would
+        //      otherwise become a free-text input where users could type
+        //      anything.
+        //   2. Otherwise, auto-infer from the prop's runtime value:
+        //      bool → checkbox, color hex → color picker, long string →
+        //      textarea, else → text input.
+        const propTypes = (def && def.propTypes) || {};
         const propFields = Object.entries(b.props || {}).map(([key, value]) => {
+          const declaredType = propTypes[key];
+
+          // Declared enum → <select>.
+          if (declaredType && declaredType.type === 'enum' && Array.isArray(declaredType.options)) {
+            const options = declaredType.options.map(opt => {
+              const optVal = escapeAttr(opt.value);
+              const optLbl = escapeHtml(opt.label != null ? opt.label : opt.value);
+              const sel = (opt.value === value) ? ' selected' : '';
+              return `<option value="${optVal}"${sel}>${optLbl}</option>`;
+            }).join('');
+            return `<label>${escapeHtml(prettifyKey(key))}</label>
+              <select onchange="updateBlockProp(${idx}, '${escapeAttr(key)}', this.value)">${options}</select>`;
+          }
+
+          // Declared number → <input type="number">. Coerce to Number on
+          // input so block render() functions don't have to defensively
+          // parseFloat. Empty string sends null so the default kicks back in.
+          if (declaredType && declaredType.type === 'number') {
+            const minAttr  = (typeof declaredType.min === 'number')  ? ` min="${declaredType.min}"`   : '';
+            const maxAttr  = (typeof declaredType.max === 'number')  ? ` max="${declaredType.max}"`   : '';
+            const stepAttr = (typeof declaredType.step === 'number') ? ` step="${declaredType.step}"` : '';
+            return `<label>${escapeHtml(prettifyKey(key))}</label>
+              <input type="number" value="${escapeAttr(value == null ? '' : value)}"${minAttr}${maxAttr}${stepAttr}
+                     oninput="updateBlockProp(${idx}, '${escapeAttr(key)}', this.value === '' ? null : Number(this.value))" />`;
+          }
+
+          // Auto-inference fallback (the original behavior).
           const isColor = typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value);
           const isBool = typeof value === 'boolean';
           const isLong = typeof value === 'string' && value.length > 60;
@@ -5099,15 +7555,22 @@
             <input type="text" value="${escapeAttr(value || '')}"
                    oninput="updateBlockProp(${idx}, '${escapeAttr(key)}', this.value)" />`;
         }).join('');
+        // Only the header is draggable, not the whole card. Earlier versions
+        // had draggable="true" on the card, which made the browser's native
+        // drag-handler intercept click-and-drag inside any input/textarea
+        // in the card body — users couldn't select text in fields. Making
+        // just the header draggable keeps reordering working (the header
+        // is the obvious "grab handle") while leaving form fields native.
         return `
-          <div class="of-block-card" draggable="true"
+          <div class="of-block-card"
                data-block-idx="${idx}"
-               ondragstart="blockDragStart(event, ${idx})"
                ondragover="blockDragOver(event)"
                ondragleave="blockDragLeave(event)"
-               ondrop="blockDrop(event, ${idx})"
-               ondragend="blockDragEnd(event)">
-            <div class="of-block-card-header" onclick="toggleBlockExpanded(${idx})">
+               ondrop="blockDrop(event, ${idx})">
+            <div class="of-block-card-header" draggable="true"
+                 ondragstart="blockDragStart(event, ${idx})"
+                 ondragend="blockDragEnd(event)"
+                 onclick="toggleBlockExpanded(${idx})">
               <span class="of-block-handle">⋮⋮</span>
               <span class="of-block-title">${escapeHtml(label)}</span>
               <span class="of-block-actions" onclick="event.stopPropagation();">
@@ -5128,10 +7591,22 @@
     function escapeAttr(s) { return escapeHtml(s).replace(/'/g, '&#39;'); }
 
     // ---- Drag & drop block reorder ----
+    // Drag is initiated from the .of-block-card-header (only the header is
+    // draggable, see comment in the render function). The visual drag
+    // image is the parent card, set via setDragImage so the user sees the
+    // whole block move, not just the header strip.
     let _blockDragSrc = null;
     function blockDragStart(e, idx) {
       _blockDragSrc = idx;
-      e.target.classList.add('dragging');
+      const card = e.currentTarget.closest('.of-block-card');
+      if (card) {
+        card.classList.add('dragging');
+        // Use the card as the drag image so the whole block looks like it's
+        // being moved. Offset by the cursor's position within the card so
+        // the image stays under the cursor naturally.
+        const r = card.getBoundingClientRect();
+        try { e.dataTransfer.setDragImage(card, e.clientX - r.left, e.clientY - r.top); } catch {}
+      }
       e.dataTransfer.effectAllowed = 'move';
     }
     function blockDragOver(e) {
@@ -5149,7 +7624,8 @@
       _blockDragSrc = null;
     }
     function blockDragEnd(e) {
-      e.target.classList.remove('dragging');
+      const card = e.currentTarget.closest('.of-block-card');
+      if (card) card.classList.remove('dragging');
       document.querySelectorAll('.of-block-card.drag-over').forEach(el => el.classList.remove('drag-over'));
       _blockDragSrc = null;
     }
@@ -5367,11 +7843,11 @@
       if (mode === 'OFF') {
         badge.textContent = 'OFF';
         badge.className = 'pill pill-danger';
-        if (btn) { btn.textContent = 'Turn On'; btn.className = ''; }
+        setVcToggle(btn, false);
       } else {
         badge.textContent = 'ON · ' + mode;
         badge.className = 'pill pill-success';
-        if (btn) { btn.textContent = 'Turn Off'; btn.className = 'secondary'; }
+        setVcToggle(btn, true);
       }
       // Also update the header mode pill
       updateModePill(mode);
@@ -5390,11 +7866,11 @@
         if (mode === 'OFF') {
           badge.className = 'pill pill-danger';
           badge.textContent = 'OFF · was ' + lastActiveMode;
-          if (btn) { btn.textContent = 'Turn On (' + lastActiveMode + ')'; btn.className = ''; }
+          setVcToggle(btn, false);
         } else {
           badge.className = 'pill pill-success';
           badge.textContent = 'ON · ' + mode;
-          if (btn) { btn.textContent = 'Turn Off'; btn.className = 'secondary'; }
+          setVcToggle(btn, true);
         }
         updateModePill(mode);
       };
@@ -5486,6 +7962,71 @@
         }
       }, 500);
     });
+
+    // ============================================================
+    // Demo banner hydration (v0.31.0+)
+    // ============================================================
+    // Polls /api/public/demo-status once on load. If demoMode is true,
+    // unhides the banner and runs a 1-second countdown to nextResetAt.
+    // We re-fetch nextResetAt every 60s so that after a reset we pick up
+    // the new timestamp without needing a page refresh. Cheap — one
+    // small JSON response per minute.
+    (function initDemoBanner() {
+      const banner = document.getElementById('demoBanner');
+      if (!banner) return;
+      const countdownEl = banner.querySelector('.demo-countdown');
+      const credsWraps = banner.querySelectorAll('.demo-creds-wrap');
+      const credsEl = banner.querySelector('.demo-creds');
+      let nextResetAt = null;
+      let countdownTimer = null;
+
+      function fmt(ms) {
+        if (ms <= 0) return 'now';
+        const total = Math.floor(ms / 1000);
+        const m = Math.floor(total / 60);
+        const s = total % 60;
+        return m + ':' + String(s).padStart(2, '0');
+      }
+
+      function tick() {
+        if (!nextResetAt) {
+          countdownEl.textContent = '—';
+          return;
+        }
+        const ms = nextResetAt - Date.now();
+        countdownEl.textContent = fmt(ms);
+      }
+
+      async function refresh() {
+        try {
+          const r = await fetch('/api/public/demo-status', { credentials: 'omit' });
+          if (!r.ok) return;
+          const data = await r.json();
+          if (!data.demoMode) {
+            banner.style.display = 'none';
+            return;
+          }
+          banner.style.display = 'flex';
+          if (data.credentialsHint && credsEl) {
+            credsEl.textContent = data.credentialsHint;
+            credsWraps.forEach(el => { el.hidden = false; });
+          }
+          if (data.nextResetAt) {
+            const t = Date.parse(data.nextResetAt);
+            if (Number.isFinite(t)) nextResetAt = t;
+          }
+          tick();
+        } catch (err) {
+          // Network blip; banner just keeps showing the last value.
+        }
+      }
+
+      refresh();
+      // 1s countdown so the timer is responsive without re-fetching
+      countdownTimer = setInterval(tick, 1000);
+      // 60s polling so we pick up the new reset window after each cycle
+      setInterval(refresh, 60000);
+    })();
 
     // ============================================================
     // QUEUE TAB
