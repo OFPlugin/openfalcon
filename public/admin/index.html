@@ -1663,8 +1663,8 @@
       font-weight: 600;
     }
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-  <script src="https://unpkg.com/monaco-editor@0.45.0/min/vs/loader.js"></script>
+  <script src="/vendor/chart.umd.min.js"></script>
+  <script src="/vendor/monaco/vs/loader.js"></script>
   <script>
     /* Monaco's loader.js installs an AMD `define`. jsPDF (UMD) sees it and tries
        to register anonymously, which AMD then rejects ("Can only have one
@@ -1679,8 +1679,8 @@
         s.onload = onload;
         document.head.appendChild(s);
       }
-      loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', function () {
-        loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.0/jspdf.plugin.autotable.min.js', function () {
+      loadScript('/vendor/jspdf.umd.min.js', function () {
+        loadScript('/vendor/jspdf.plugin.autotable.min.js', function () {
           window.define = _define;
         });
       });
@@ -1825,7 +1825,7 @@
           <rect class="lp" x="8"   y="-3"  width="5" height="5" rx="1"/>
         </svg>
         <span class="app-brand-text">ShowPilot</span>
-        <span class="app-version">v0.33.194</span>
+        <span class="app-version">v0.33.195</span>
       </span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
@@ -7718,7 +7718,7 @@
       if (monacoEditor) return Promise.resolve();
       return new Promise((resolve) => {
         if (typeof require === 'undefined') return resolve();
-        require.config({ paths: { vs: 'https://unpkg.com/monaco-editor@0.45.0/min/vs' } });
+        require.config({ paths: { vs: '/vendor/monaco/vs' } });
         require(['vs/editor/editor.main'], () => {
           monacoEditor = monaco.editor.create(document.getElementById('monacoContainer'), {
             value: '',

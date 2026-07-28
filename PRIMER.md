@@ -1,6 +1,6 @@
 # ShowPilot Project Primer
 
-This document gives you (Claude, in a future conversation) the context you need to help Will work on ShowPilot effectively. Read this first before any other project files.
+This document gives you (Claude, in a future conversation) the context you need to help the maintainer work on ShowPilot effectively. Read this first before any other project files.
 
 ---
 
@@ -19,7 +19,7 @@ Key things it does:
 
 ShowPilot talks to FPP via a companion plugin (`ShowPilot-plugin`) that runs inside FPP. The plugin syncs sequence metadata, reports playback state, and pushes interaction events.
 
-**Branding/domain context:** Will runs his show as "the show" at <show-domain>. ShowPilot is the underlying software (formerly "OpenFalcon" — references to that name still appear in some config defaults).
+**Branding/domain context:** The maintainer runs the show as "the show" at <show-domain>. ShowPilot is the underlying software (formerly "OpenFalcon" — references to that name still appear in some config defaults).
 
 ---
 
@@ -69,7 +69,7 @@ ShowPilot talks to FPP via a companion plugin (`ShowPilot-plugin`) that runs ins
 
 ## Deployment topology
 
-Will runs **three** ShowPilot environments. Don't conflate them.
+The maintainer runs **three** ShowPilot environments. Don't conflate them.
 
 ### 1. Production LXC (Proxmox)
 - Host: `<prod-lxc-ip>`, hostname still says `OpenFalcon` (cosmetic, not renamed yet)
@@ -80,11 +80,11 @@ Will runs **three** ShowPilot environments. Don't conflate them.
 - Logs: `pm2 logs showpilot`
 - Show token: `<show-token>`
 
-### 2. Docker test container (Will's Windows PC)
+### 2. Docker test container (maintainer's Windows PC)
 - Image: `ghcr.io/showpilotfpp/showpilot:latest`
 - Container name: `sp-beta`
 - Port: host `3101` → container `3100`
-- Bind mount: `C:\Users\Will\sp-beta-data` → `/app/data`
+- Bind mount: `C:\Users\<user>\sp-beta-data` → `/app/data`
 - Auto-update: Watchtower watches and pulls new `:latest` images
 - Restart policy: `unless-stopped`
 - Used for: testing fresh installs, restore round-trips, anything risky before prod
@@ -117,7 +117,7 @@ Will runs **three** ShowPilot environments. Don't conflate them.
 Standard release process:
 
 ```powershell
-# On Will's dev machine (Windows, PowerShell)
+# On the dev machine (Windows, PowerShell)
 cd C:\dev\ShowPilot
 git pull origin main
 tar -xzf "$env:USERPROFILE\Downloads\showpilot-vX.Y.Z.tar.gz" --strip-components=1
@@ -140,13 +140,13 @@ For Docker test, watchtower auto-pulls. To force a fresh test:
 
 ```powershell
 docker stop sp-beta
-Remove-Item -Recurse -Force C:\Users\Will\sp-beta-data
+Remove-Item -Recurse -Force C:\Users\<user>\sp-beta-data
 docker pull ghcr.io/showpilotfpp/showpilot:latest
-New-Item -ItemType Directory -Path C:\Users\Will\sp-beta-data | Out-Null
-docker run -d --name sp-beta -p 3101:3100 -v C:\Users\Will\sp-beta-data:/app/data --restart unless-stopped ghcr.io/showpilotfpp/showpilot:latest
+New-Item -ItemType Directory -Path C:\Users\<user>\sp-beta-data | Out-Null
+docker run -d --name sp-beta -p 3101:3100 -v C:\Users\<user>\sp-beta-data:/app/data --restart unless-stopped ghcr.io/showpilotfpp/showpilot:latest
 ```
 
-When you ship code, package it as a tarball at `/mnt/user-data/outputs/showpilot-vX.Y.Z.tar.gz`. Will downloads, extracts over his dev clone, commits, pushes.
+When you ship code, package it as a tarball at `/mnt/user-data/outputs/showpilot-vX.Y.Z.tar.gz`. The maintainer downloads, extracts over the dev clone, commits, pushes.
 
 ### Standard tarball packaging commands (CRITICAL — never exclude .github)
 
@@ -172,7 +172,7 @@ node --check /home/claude/showpilot-plugin/showpilot_audio.js && echo "Daemon OK
 
 ### ShipPilot
 
-Will uses ShipPilot (his own tool, separate LXC) to push releases to GitHub. Each release needs a `.release.json` in the repo root:
+The maintainer uses ShipPilot (an in-house tool, separate LXC) to push releases to GitHub. Each release needs a `.release.json` in the repo root:
 
 ```json
 {
@@ -392,6 +392,7 @@ If `fppPos` and `audioPos` differ significantly but `drift` shows ~0ms, that's e
 | 0.33.191 | Fix viewer page sub-tabs layout: use sub-tabs class in card wrapper so tabs render horizontally. querySelectorAll live updates: `.now-playing-text`, `[data-showpilot-next]`, `[data-showpilot-queue-size]`, `[data-showpilot-queue-list]` now update all matching DOM copies (fixes templates with duplicate `{PLAYLISTS}` / `{NEXT_PLAYLIST}` blocks). Jukebox handoff re-return: when no fresh entry to hand off, re-returns the already-handed-off-but-not-confirmed-played entry so FPP keeps it queued in non-interrupt mode. Baseline snapshot on jukebox add: captures return point at first add. Interrupt-mode auto-detection in `/next`. `nextScheduled` socket listener added to rf-compat. rf-compat v=77. |
 | 0.33.172 | Fix audio_cache_files schema: `hash TEXT PRIMARY KEY` prevented storing multiple language variants (SQLite only allows one row per hash). Migration rebuilds the table with `id INTEGER PRIMARY KEY AUTOINCREMENT` and `UNIQUE(media_name, language)` — one row per file+language combination, hash is a plain column. All upserts in `storeUploadedFile`, `storeLanguageFile`, `linkMediaNameToHash` updated to use `ON CONFLICT(media_name, language)`. |
 | 0.33.194 | Audio debug UI off by default. Sync debug overlay (`?debug=1` equivalent) and player bar drift/calibration stats are now hidden unless enabled. New admin Settings → Debug sub-tab with two checkboxes: "Show sync debug overlay on viewer page" and "Show audio stats in player bar". Both default off. Bootstrap passes `debugOverlayEnabled` and `playerStatsEnabled`; rf-compat gates the overlay and `driftEl` on those flags. |
+| 0.33.195 | Vendored the last three CDN-loaded frontend libraries: Chart.js 4.4.1, Monaco 0.45.0, and jsPDF 2.5.1 + jspdf-autotable 3.8.0 now load from `public/vendor/` instead of `cdnjs.cloudflare.com` / `unpkg.com`. Motivation is NOT the FPP plugin guidelines that drove the equivalent Lite change (main is self-hosted and answers to no plugin review) — it is that the admin panel degrades without internet. Monaco backs the viewer-page template editor, so on a LAN-only or firewalled show box that editor silently failed to load. Also fixes a latent trap: `public/vendor/jspdf.umd.min.js` and `jspdf.plugin.autotable.min.js` had been sitting in the repo since an early vendoring pass as 21-byte files containing the literal text `Host not in allowlist` (a sandbox egress-proxy error body saved to disk as the library). Harmless while main still loaded jsPDF from the CDN, but it would have broken Export Stats PDF the moment the loader was pointed at them — which is exactly what happened in Lite v0.5.51 (fixed in Lite v0.5.53). Both replaced with genuine npm-registry bundles and verified functionally: loaded in a VM context, `window.jspdf` defined, `doc.autoTable` attaches, real `%PDF-` output generated. All five loader references in `public/admin/index.html` rewritten to absolute `/vendor/...` paths, which resolve through the existing root static mount in `server.js`; every URL was fetched against a static server over `public/` to confirm it returns 200 before shipping. Adds ~13 MB to the repo and to the Docker image. |
 
 **Plugin version history (this session):**
 | Version | Change |
@@ -448,12 +449,12 @@ These are known but deferred. Don't fix unprompted unless they're blocking the c
 
 ---
 
-## Will's context
+## Maintainer context
 
-- Non-coder. Runs commands, doesn't write code himself. Give him paste-able scripts.
+- Non-coder. Runs commands rather than writing code. Provide paste-able scripts.
 - Self-hosted synchronized light show (Halloween season).
 - Show season: October. Off-season testing with FPP running playlists in test mode.
-- Other projects: HG Cellular (device refurb), NWAobits.com (obituaries), countdown calendar PWA, C:\PokePricing (TCG pricing), Amazon intelligence dashboard.
+- Runs several unrelated self-hosted side projects; occasionally referenced for context but not part of this codebase.
 - Prefers iterative testing — risky changes on Docker first, then prod.
 - Uses ShipPilot for all GitHub releases.
 
