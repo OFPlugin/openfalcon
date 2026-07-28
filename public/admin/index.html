@@ -1825,7 +1825,7 @@
           <rect class="lp" x="8"   y="-3"  width="5" height="5" rx="1"/>
         </svg>
         <span class="app-brand-text">ShowPilot</span>
-        <span class="app-version">v0.33.195</span>
+        <span class="app-version">v0.33.196</span>
       </span>
       <span id="modePill" class="mode-pill off">OFF</span>
       <span class="header-spacer"></span>
@@ -3400,7 +3400,7 @@
               <button id="updateRollbackBtn" class="secondary" onclick="rollbackUpdate()" style="display: none;">Roll back to previous version</button>
             </div>
 
-            <div id=\"updateActionStatus\" class=\"muted\" style=\"margin-top: 0.75rem; font-size: 0.85rem;\"></div>
+            <div id="updateActionStatus" class="muted" style="margin-top: 0.75rem; font-size: 0.85rem;"></div>
           </div>
 
           <!-- DEBUG — diagnostics toggles for audio sync troubleshooting (v0.33.194+) -->
@@ -7714,10 +7714,20 @@
     let selectedTplId = null;
     let loadedContent = '';
 
+    let _monacoInitPromise = null;
     function initMonacoIfNeeded() {
       if (monacoEditor) return Promise.resolve();
-      return new Promise((resolve) => {
-        if (typeof require === 'undefined') return resolve();
+      // `monacoEditor` is only assigned once the async require() below
+      // resolves. Several call sites (tab switch, PDF export, etc.) can
+      // each fire before that happens, and each would otherwise pass the
+      // guard above and re-issue require(['vs/editor/editor.main']),
+      // which is what produces AMD's "Duplicate definition of module"
+      // warning — harmless-looking but wasteful and a source of subtle
+      // double-init bugs. Caching the in-flight promise makes every
+      // caller await the same single load.
+      if (_monacoInitPromise) return _monacoInitPromise;
+      _monacoInitPromise = new Promise((resolve) => {
+        if (typeof require === 'undefined') { _monacoInitPromise = null; return resolve(); }
         require.config({ paths: { vs: '/vendor/monaco/vs' } });
         require(['vs/editor/editor.main'], () => {
           monacoEditor = monaco.editor.create(document.getElementById('monacoContainer'), {
