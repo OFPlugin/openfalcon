@@ -3052,6 +3052,22 @@
     // When the gate is disabled, the click opens the player directly — no
     // permission prompts, no GPS. Showrunners playing original or licensed
     // content shouldn't have to ask viewers for location just to listen.
+    btn.addEventListener('touchend', () => {
+      const silentAudio = document.createElement('audio');
+      silentAudio.src = './silent.mp3'; // a short silent mp3 file
+
+      silentAudio.preload = 'auto';
+      silentAudio.loop = true;
+      silentAudio.setAttribute('x-webkit-airplay', 'deny');
+      
+      silentAudio.play().catch(e => console.log(e));
+    
+      // Now initialize or resume your AudioContext
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioCtx.resume();
+
+    }, {once: true} );
+    
     btn.onclick = async () => {
       // If the show isn't currently playing, there's no audio to gate on.
       // Skip the location prompt entirely — just open the panel so the
