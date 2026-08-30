@@ -3053,6 +3053,24 @@
     // permission prompts, no GPS. Showrunners playing original or licensed
     // content shouldn't have to ask viewers for location just to listen.
     btn.onclick = async () => {
+      // iOS Safari only allows an AudioContext to start unsuspended when
+      // it's created (or resumed) synchronously inside a user-gesture
+      // callback. This handler is async and later awaits a location
+      // prompt (_ofVerifyLocationForAudio) before startup() ever runs —
+      // by the time startup() creates `audioCtx`, the gesture window has
+      // long closed and iOS hands back a permanently suspended context,
+      // so audio never plays. Fix: grab the real AudioContext right here,
+      // still inside the synchronous part of the click handler, and let
+      // startup() reuse it instead of creating its own. (Credit: iPhone
+      // audio-blocked repro via PR #17 from jddocea.)
+      if (!audioCtx) {
+        try {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch {}
+      }
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
       // If the show isn't currently playing, there's no audio to gate on.
       // Skip the location prompt entirely — just open the panel so the
       // user sees the "Show isn't playing" message. We'll ask for location
@@ -3165,7 +3183,13 @@
 
     async function startup() {
       try {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        // Reuse the AudioContext created synchronously in btn.onclick's
+        // user-gesture window (iOS requires this — see comment there).
+        // Only create one here as a fallback for callers that reach
+        // startup() without going through that click handler.
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
         gainNode = audioCtx.createGain();
         gainNode.gain.value = isMuted ? 0 : 1;
         gainNode.connect(audioCtx.destination);
