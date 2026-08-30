@@ -2839,6 +2839,17 @@
     // ---- State ----
     let panelMode = 'closed';     // 'closed' | 'open' | 'minimized'
     let audioCtx = null;
+    // Holds an AudioContext created synchronously inside a user-gesture
+    // handler (btn.onclick), before startup() actually runs. iOS Safari
+    // only leaves an AudioContext unsuspended if it's constructed within
+    // the gesture's call stack — the moment of construction is what
+    // matters, not when we hand it to startup(). Kept separate from
+    // `audioCtx` itself so the `!audioCtx` check in setMode()/
+    // applyShowNotPlaying (which means "has startup() run yet") still
+    // works — assigning straight to `audioCtx` here made those checks
+    // think startup already happened and skip it, breaking first-open
+    // audio entirely. Consumed and cleared by startup().
+    let _pendingGestureAudioCtx = null;
     let gainNode = null;
     let isMuted = false;
     let currentBuffer = null;     // AudioBuffer of currently-playing track
@@ -3059,14 +3070,23 @@
       // prompt (_ofVerifyLocationForAudio) before startup() ever runs —
       // by the time startup() creates `audioCtx`, the gesture window has
       // long closed and iOS hands back a permanently suspended context,
-      // so audio never plays. Fix: grab the real AudioContext right here,
-      // still inside the synchronous part of the click handler, and let
-      // startup() reuse it instead of creating its own. (Credit: iPhone
-      // audio-blocked repro via PR #17 from jddocea.)
-      if (!audioCtx) {
+      // so audio never plays. Fix: construct it right here, still inside
+      // the synchronous part of the click handler, and stash it for
+      // startup() to pick up. (Credit: iPhone audio-blocked repro via
+      // PR #17 from jddocea.)
+      //
+      // NOTE: this must NOT assign directly to `audioCtx` — setMode()
+      // and applyShowNotPlaying() use `!audioCtx` to mean "startup()
+      // hasn't run yet." Assigning here made them think it already had,
+      // so startup() (which fetches audio and builds gainNode) never
+      // fired on first open. Use the pending slot instead.
+      if (!audioCtx && !_pendingGestureAudioCtx) {
         try {
-          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          _pendingGestureAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
         } catch {}
+      }
+      if (_pendingGestureAudioCtx && _pendingGestureAudioCtx.state === 'suspended') {
+        _pendingGestureAudioCtx.resume().catch(() => {});
       }
       if (audioCtx && audioCtx.state === 'suspended') {
         audioCtx.resume().catch(() => {});
@@ -3183,11 +3203,17 @@
 
     async function startup() {
       try {
-        // Reuse the AudioContext created synchronously in btn.onclick's
+        // Consume the AudioContext created synchronously in btn.onclick's
         // user-gesture window (iOS requires this — see comment there).
-        // Only create one here as a fallback for callers that reach
-        // startup() without going through that click handler.
-        if (!audioCtx) {
+        // Falls back to constructing one here for callers that reach
+        // startup() without going through that click handler (e.g. the
+        // show-resumed path in applyShowNotPlaying) — those won't get
+        // the iOS gesture benefit, but that's a pre-existing, documented
+        // limitation, not something this fix needs to solve.
+        if (_pendingGestureAudioCtx) {
+          audioCtx = _pendingGestureAudioCtx;
+          _pendingGestureAudioCtx = null;
+        } else if (!audioCtx) {
           audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         }
         gainNode = audioCtx.createGain();
