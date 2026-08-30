@@ -2839,6 +2839,20 @@
     // ---- State ----
     let panelMode = 'closed';     // 'closed' | 'open' | 'minimized'
     let audioCtx = null;
+    // iOS Safari's Web Audio API defaults to the "ambient" audio session
+    // category, which respects the hardware mute switch — silencing our
+    // audio even when the show is playing and the AudioContext itself is
+    // "running". HTML <audio>/<video> elements default to a category that
+    // ignores the switch, which is why old silent-mp3 "kick" hacks (see
+    // PR #17) worked at all — they weren't fixing gesture timing, they
+    // were nudging Safari into a different session category. The real,
+    // standards-based fix is the AudioSession API (Safari-shipped,
+    // WebKit-authored): telling it this page's audio is genuine media
+    // playback makes it ignore the mute switch, no silent asset needed.
+    // Feature-detected since only Safari has it; harmless no-op elsewhere.
+    if ('audioSession' in navigator) {
+      try { navigator.audioSession.type = 'playback'; } catch {}
+    }
     // Holds an AudioContext created synchronously inside a user-gesture
     // handler (btn.onclick), before startup() actually runs. iOS Safari
     // only leaves an AudioContext unsuspended if it's constructed within
@@ -3090,6 +3104,13 @@
       }
       if (audioCtx && audioCtx.state === 'suspended') {
         audioCtx.resume().catch(() => {});
+      }
+      // Re-assert on every tap, not just at module init — WebKit can
+      // reset the session type back to "ambient" after an interruption
+      // (phone call, Siri, another app grabbing audio focus). Cheap and
+      // idempotent, so no harm in repeating it.
+      if ('audioSession' in navigator) {
+        try { navigator.audioSession.type = 'playback'; } catch {}
       }
       // If the show isn't currently playing, there's no audio to gate on.
       // Skip the location prompt entirely — just open the panel so the
